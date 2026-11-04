@@ -1,0 +1,2135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>桥联 LANBridge · 桥联大厅 (文明6专线)</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAAEi0lEQVRYR82Xf2xTZRjHP/e23dbd2rXruoFjAxm4DRmDccwwt8FAfqiIIbBwEw0ajDFR4xdGg0QTQzSKmKiJMQoKxhBDiFE3f4gh/qH5YzKMYGDIxBl0y9bduq3vfe/V3/Ou67ru3qVb19n6TZ7m3HPPed7nz/O8z/M836twg2n7i51eTzV/2p2sWqW2o9c3lWw2m83j8fgLCwtrmpqatqSnpx/Kzc1dlJmZuSo5OXkx4JmYmLgtMTHx85ycHN91jYGBgR8LCgrq4+LipgcGBpYAv8zOzs5PTExkRkdHT+bn57tHRkb+KCsra/F4PEf/b+r/bMDG7fV630xLS/vS5XLlOp3OmbNnz76zYsWKFZmZmcsKCgr8c3Nzc+bm5q79n8Cnpqb6kpOT/Z2dnb5Zs9ls/wz89u3bK3bu3PljRkbGNp/Pd/bQoUNeBBi85h9fBq9YscJjs9mG+/v7b6elpX3Q0dFh44EHDx58y+FwbHO73RtKSkrmLl269M61FfF99bW3t+9wOBx18XHxO+rrd2/gAQcPHjyUlpa2zeFwbFq2bFl2cXHx3PX38X21dXd3l2VlZf34+PFjZWVl3zscDkc8cODAgT/Hx8dv+/3+qampqc+5uevvgW9vb//N5XIdycvLe+3kyZMvW61WTzzQ0NDQ5HQ6rRcvXvx2YmLi1z+77e2ZPn78uDY+Pv61ixcvfrl69eotw8PDH/HAnXff/b5P5eU2m83r8/m2r1mzJm9iYuLaL12rqalp8Xq9/6Smpu5va2uz8YDNZluZlZW1Znh4+C2Xy5W2fPny7NnZ2Wt84f9q7+/vL3A4HIOJiYmfXrp0yZ+amrr4z/z4f/i1tbUfeTyeg9u3b3fcuXPnjtzc3Nd4ID4+fm1aWtpWj8fziN1uXx8XF5c2NTU1/0vXenp6ft69e/eB/v7+1xsbG2184X/hLS0t37lcrvdWr1794pEjR7bHx8en8MB33333eWpq6tbdu3evjY2NTQ4PD1+/pmc+ODh4yuv17s/Ly9vw/vvvP80DXq/3Q4/H8/7WrVsfbWpqeikpKck5PT199fr6+/vPzM7O9uTn5/tHjhy5y/P0+1/3fvfdd63btm37KDExsTEjI2Pl+Pj4d/Pz89e6eGpqak50dPT9np6enw8dOuR95M8Z7x/+9u3bv2hqatrjdrs37du3b1V6enpyRETE/Nzc3N/W1tbW312/ft27Zs2aTadPn/49ODj4Cw/wV5vD4Vjj8Xh+SkxM/OzixYve5OTkzxcWFqa/n969vb3fz8zMdOXl5a0aGBj42W63r/vjFvjX7d+/f6PD4djg8XjWxcTEPP/H3e/xeP5ZWFhYNTExce3UqVNeHlgI4A14eHg4Znd399f5+fn7jhw5cph3f/y343rD7/7V2bNnv3c4HPtPnDjxEQ/wnuPj499wOBw7du7cefvRo0e/vHHjxsW/j/e+7777zrncrqN5eXnPX758ucZut6/8w/b5/0X42traJj6x+/fvX+fxeNZdvXr160WLFkV88MEH9/D7838B+9z19+z8QYgAAAAASUVORK5CYII=">
+<style>
+  /*
+   * magpie 极简专业仪表盘规范:
+   * - 范式 B: 数据导向 (Data-Oriented Dashboard)
+   * - 调性: 浅灰底 + 纯白面板、严谨小圆角 5px、小字号 (12-13px)、字重层次分明
+   * - 字体: 代码/IP/Node ID/Network ID/延迟毫秒一律等宽 (ui-monospace)
+   * - 色彩克制: 中性炭黑底色 + 纯蓝主操作 + 极细中性线, 绿色仅用于连接与低延迟
+   * - 布局: 紧凑双视图 (大厅模式 Lobby / 房间专属工作台 Room Console), 智能平滑切换
+   */
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --card-subtle: #f9fafb;
+    --card-hover: #f1f3f6;
+    --border: #e2e5ea;
+    --border-subtle: #edf0f4;
+    --fg: #0f172a;
+    --fg-muted: #475569;
+    --fg-subtle: #64748b;
+    --fg-faint: #94a3b8;
+    --accent: #2563eb;
+    --accent-subtle: #eff6ff;
+    --accent-border: #bfdbfe;
+    --ok: #16a34a;
+    --ok-subtle: #f0fdf4;
+    --warn: #f59e0b;
+    --warn-subtle: #fefce8;
+    --err: #dc2626;
+    --err-subtle: #fef2f2;
+    --radius: 5px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0f13;
+      --card: #15181f;
+      --card-subtle: #1a1e27;
+      --card-hover: #212632;
+      --border: #272c38;
+      --border-subtle: #1e222c;
+      --fg: #f1f5f9;
+      --fg-muted: #cbd5e1;
+      --fg-subtle: #94a3b8;
+      --fg-faint: #64748b;
+      --accent: #3b82f6;
+      --accent-subtle: #172554;
+      --accent-border: #1e40af;
+      --ok: #22c55e;
+      --ok-subtle: #052e16;
+      --warn: #fbbf24;
+      --warn-subtle: #451a03;
+      --err: #ef4444;
+      --err-subtle: #450a0a;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font: 12.5px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  .app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* 顶部全局 Header (48px 极简黑白灰高质感) */
+  header.global-header {
+    height: 48px;
+    flex: none;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    z-index: 10;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: -0.3px;
+    color: var(--fg);
+    cursor: pointer;
+  }
+  .brand-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    background: linear-gradient(135deg, #1e3a8a, #2563eb);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(37,99,235,0.3);
+  }
+  .node-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--card-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 2px 8px;
+    font-size: 11.5px;
+    color: var(--fg-subtle);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .node-status-pill:hover {
+    border-color: var(--accent);
+    color: var(--fg);
+  }
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .status-dot.ok { background: var(--ok); box-shadow: 0 0 0 2px var(--ok-subtle); }
+  .status-dot.wait { background: var(--warn); animation: pulse 1.2s infinite ease-in-out; }
+  .status-dot.err { background: var(--err); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* 顶部居中 Pill 导航 */
+  .nav-pill-container {
+    display: inline-flex;
+    background: var(--card-subtle);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .nav-pill {
+    border: none;
+    background: transparent;
+    color: var(--fg-subtle);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s ease;
+  }
+  .nav-pill:hover { color: var(--fg); }
+  .nav-pill.active {
+    background: var(--card);
+    color: var(--fg);
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  }
+  .nav-pill svg { opacity: 0.8; }
+  .nav-pill.active svg { color: var(--accent); opacity: 1; }
+  .nav-pill .dot-active {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ok);
+  }
+
+  /* Header 右侧用户区 */
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .user-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--fg-muted);
+  }
+
+  /* 右侧竖向分隔线 */
+  .header-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    margin: 0 2px;
+  }
+
+  /* 文明6 专线微标与横幅样式 */
+  .civ6-tag-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    background: linear-gradient(135deg, rgba(217, 119, 6, 0.15), rgba(180, 83, 9, 0.2));
+    color: #d97706;
+    border: 1px solid rgba(217, 119, 6, 0.35);
+  }
+  @media (prefers-color-scheme: dark) {
+    .civ6-tag-pill {
+      color: #fbbf24;
+      border-color: rgba(251, 191, 36, 0.35);
+    }
+  }
+
+  .civ6-notice-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    background: linear-gradient(135deg, rgba(217, 119, 6, 0.06), rgba(37, 99, 235, 0.03));
+    border: 1px solid rgba(217, 119, 6, 0.25);
+    border-radius: var(--radius);
+  }
+  .civ6-notice-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .civ6-notice-tag {
+    background: linear-gradient(135deg, #b45309, #d97706);
+    color: #ffffff;
+    font-weight: 800;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+    box-shadow: 0 1px 3px rgba(180, 83, 9, 0.3);
+    flex: none;
+  }
+  .civ6-notice-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .civ6-notice-desc {
+    font-size: 11px;
+    color: var(--fg-subtle);
+    margin-top: 1px;
+  }
+  .civ6-notice-right {
+    font-size: 11.5px;
+    color: var(--fg-subtle);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+  }
+
+  .civ6-filter-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 3px 10px;
+    border-radius: var(--radius);
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .civ6-filter-badge svg {
+    color: #d97706;
+  }
+  .civ6-select-fixed {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: var(--radius);
+    font-size: 11.5px;
+  }
+
+  /* 主视窗区 */
+  main.main-viewport {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 18px 24px;
+  }
+  .view-pane {
+    display: none;
+    max-width: 930px;
+    margin: 0 auto;
+    animation: fadeIn 0.15s ease;
+  }
+  .view-pane.active { display: block; }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(2px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* 通用面板容器 (magpie 风格) */
+  .panel-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+  .panel-header {
+    padding: 8px 12px;
+    background: var(--card-subtle);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .panel-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .panel-body { padding: 12px; }
+
+  /* 概览微卡片行 */
+  .metrics-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .metric-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 9px 12px;
+  }
+  .metric-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+    letter-spacing: 0.4px;
+    margin-bottom: 3px;
+  }
+  .metric-value {
+    font-family: var(--mono);
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--fg);
+    line-height: 1.2;
+  }
+  .metric-sub {
+    font-size: 11px;
+    color: var(--fg-faint);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* 紧凑数据表格 */
+  .table-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--card-subtle);
+    border-bottom: 1px solid var(--border);
+  }
+  .toolbar-left, .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 12px;
+  }
+  table.data-table th {
+    background: var(--card-subtle);
+    color: var(--fg-subtle);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.data-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--fg);
+    vertical-align: middle;
+  }
+  table.data-table tr:last-child td { border-bottom: none; }
+  table.data-table tr:hover td { background: var(--card-hover); }
+  table.data-table tr.current-row td { background: var(--accent-subtle); }
+  .mono { font-family: var(--mono); font-size: 11.5px; }
+  .dim { color: var(--fg-subtle); }
+
+  /* 按钮与控件 (magpie 小尺寸、严谨硬朗) */
+  @keyframes spinFast {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  .spinning svg {
+    animation: spinFast 0.65s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .table-refreshing {
+    opacity: 0.45;
+    filter: blur(0.5px);
+    transition: opacity 0.15s ease, filter 0.15s ease;
+    pointer-events: none;
+  }
+  button.btn {
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--fg);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    transition: all 0.12s ease;
+    white-space: nowrap;
+  }
+  button.btn:active {
+    transform: scale(0.96);
+  }
+  button.btn:hover {
+    background: var(--card-hover);
+    border-color: var(--fg-faint);
+  }
+  button.btn.btn-sm { padding: 2px 7px; font-size: 11.5px; }
+  button.btn.btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #ffffff;
+    font-weight: 600;
+  }
+  button.btn.btn-primary:hover { filter: brightness(1.08); }
+  button.btn.btn-danger {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--err);
+  }
+  button.btn.btn-danger:hover {
+    background: var(--err-subtle);
+    border-color: var(--err);
+  }
+  button.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  input.input-text, select.select-box {
+    font: inherit;
+    font-size: 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: var(--radius);
+    padding: 4px 8px;
+    transition: border-color 0.12s ease;
+  }
+  input.input-text:focus, select.select-box:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  input.input-text::placeholder { color: var(--fg-faint); }
+
+  /* 标签徽章 */
+  .tag {
+    font-size: 11px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: var(--card-subtle);
+    color: var(--fg-muted);
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .tag.host {
+    background: var(--warn-subtle);
+    border-color: #fde68a;
+    color: #b45309;
+    font-weight: 600;
+  }
+  .tag.you {
+    background: var(--accent-subtle);
+    border-color: var(--accent-border);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* 延迟小圆点与数值显示 */
+  .latency-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .net-switcher { position: relative; }
+  .net-switcher-btn {
+    display: flex; align-items: center; gap: 6px;
+    font: inherit; font-size: 12px; font-weight: 500;
+    border: 1px solid var(--border); background: var(--card);
+    color: var(--fg); border-radius: var(--radius);
+    padding: 4px 10px; cursor: pointer;
+  }
+  .net-switcher-btn:hover { border-color: var(--accent); }
+  .net-switcher.open .net-switcher-btn { border-color: var(--accent); color: var(--accent); }
+  .net-switcher-menu {
+    display: none; position: absolute; right: 0; top: calc(100% + 6px);
+    min-width: 260px; z-index: 60;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    padding: 4px;
+  }
+  .net-switcher.open .net-switcher-menu { display: block; }
+  .net-menu-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    font: inherit; text-align: left; background: transparent; border: none;
+    border-radius: 4px; padding: 8px 10px; cursor: pointer; color: var(--fg);
+  }
+  .net-menu-item:hover { background: var(--card-hover); }
+  .net-menu-info { flex: 1; min-width: 0; }
+  .net-menu-title { font-size: 12.5px; font-weight: 600; }
+  .net-menu-sub { font-size: 11px; color: var(--fg-subtle); margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .net-menu-go { font-size: 11px; color: var(--accent); font-weight: 600; flex: none; }
+  .badge {
+    display: inline-block;
+    font-size: 10.5px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--fg-subtle);
+    background: var(--card-subtle);
+    vertical-align: 1px;
+  }
+  .ping-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .ping-dot.excellent { background: var(--ok); }
+  .ping-dot.good { background: var(--accent); }
+  .ping-dot.fair { background: var(--warn); }
+  .ping-dot.timeout { background: var(--fg-faint); }
+
+  /* 创建房间内联抽屉 */
+  .create-drawer {
+    display: none;
+    background: var(--card-subtle);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 12px;
+  }
+  .create-drawer.open {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  /* ========== 专属房间界面 (ROOM CONSOLE VIEW) ========== */
+  .room-hero-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .room-hero-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .game-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius);
+    background: var(--card-subtle);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--accent);
+    flex: none;
+  }
+  .room-meta-group { min-width: 0; }
+  .room-title-line {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    letter-spacing: -0.3px;
+  }
+  .room-sub-line {
+    font-size: 11.5px;
+    color: var(--fg-subtle);
+    margin-top: 2px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .room-hero-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+  }
+
+  /* 快速直连指引卡 (Smart Quick Connect) */
+  .quick-connect-banner {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .connect-ip-wrap {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .connect-ip-val {
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: -0.5px;
+  }
+  .connect-hint {
+    font-size: 11.5px;
+    color: var(--fg-subtle);
+    line-height: 1.4;
+  }
+
+  /* 模态弹窗 */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    backdrop-filter: blur(2px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-dialog {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: min(360px, 92vw);
+    box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+    overflow: hidden;
+  }
+  .modal-header {
+    padding: 10px 14px;
+    background: var(--card-subtle);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+  }
+  .modal-body {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .form-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fg-subtle);
+    text-transform: uppercase;
+  }
+  .modal-footer {
+    padding: 10px 14px;
+    background: var(--card-subtle);
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  /* 控制台日志 */
+  .console-box {
+    background: #090b10;
+    color: #e2e8f0;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.55;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    white-space: pre-wrap;
+    word-break: break-all;
+    user-select: text;
+  }
+
+  /* Toast */
+  #toast-container {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 200;
+    pointer-events: none;
+  }
+  .toast-item {
+    background: #0f172a;
+    color: #ffffff;
+    font-size: 12px;
+    padding: 6px 14px;
+    border-radius: var(--radius);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 6px;
+    animation: toastIn 0.15s ease;
+  }
+  .toast-item.err { background: var(--err); }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app-container">
+
+  <!-- 全局 Header -->
+  <header class="global-header">
+    <div class="header-left">
+      <div class="brand-badge" id="brandBtn">
+        <div class="brand-icon">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+        </div>
+        <div style="display:flex;align-items:center;gap:7px">
+          <span>桥联 LANBridge</span>
+          <span class="civ6-tag-pill">文明6 专线</span>
+        </div>
+      </div>
+      <div class="node-status-pill" id="nodePill" title="点击复制 Node ID">
+        <span class="status-dot wait" id="nodeDot"></span>
+        <span id="nodePillText">ZeroTier 探测中…</span>
+      </div>
+    </div>
+
+    <!-- 顶部居中 Pill 分段导航 -->
+    <div class="nav-pill-container">
+      <button class="nav-pill active" id="pillLobby" data-view="view-lobby">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        桥联大厅
+      </button>
+      <button class="nav-pill hidden" id="pillRoom" data-view="view-room">
+        <span class="dot-active"></span>
+        当前房间
+      </button>
+      <button class="nav-pill" id="pillConsole" data-view="view-console">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+        控制台
+      </button>
+    </div>
+
+    <!-- 右侧用户信息 -->
+    <div class="header-right">
+      <div class="header-divider"></div>
+
+      <div class="user-badge">
+        <span id="userName" style="font-weight:500">未登录</span>
+      </div>
+      <button class="btn btn-sm" id="authBtn">登录</button>
+    </div>
+  </header>
+
+  <!-- 主视窗区 -->
+  <main class="main-viewport">
+
+    <!-- ==================== VIEW 1: 房间大厅 ==================== -->
+    <section id="view-lobby" class="view-pane active">
+
+      <!-- 快速返回房间横条 (若正在房间中) -->
+      <div id="lobbyBackBar" class="panel-box hidden" style="background:var(--accent-subtle);border-color:var(--accent-border);padding:8px 12px;margin-bottom:10px;cursor:pointer">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="ping-dot excellent"></span>
+            <span style="font-weight:600;color:var(--accent)">正在桥联联机中:</span>
+            <span id="lobbyActiveRoomName" style="font-weight:500">我的房间</span>
+            <span class="mono" id="lobbyActiveIp" style="font-size:11.5px;color:var(--accent)">10.147.x.x</span>
+          </div>
+          <span style="font-size:11.5px;color:var(--accent);font-weight:600">点击进入房间工作台 →</span>
+        </div>
+      </div>
+
+      <!-- 文明6 专版提示横幅 -->
+      <div class="civ6-notice-banner">
+        <div class="civ6-notice-left">
+          <span class="civ6-notice-tag">CIV 6</span>
+          <div>
+            <div class="civ6-notice-title">🏛️ 文明6 智能桥联专线大厅</div>
+            <div class="civ6-notice-desc">当前桥联大厅专供《文明6》智能局域网互通与低延迟对战，自动建立专线通道。其他游戏支持筹备中。</div>
+          </div>
+        </div>
+        <div class="civ6-notice-right">
+          <span class="status-dot ok"></span> 桥联网络就绪
+        </div>
+      </div>
+
+      <!-- 概览指标卡 -->
+      <div class="metrics-strip">
+        <div class="metric-card">
+          <div class="metric-label">活动房间 (ROOMS)</div>
+          <div class="metric-value" id="mTotalRooms">0</div>
+          <div class="metric-sub">实时广播</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">当前虚拟 IP (VIRTUAL IP)</div>
+          <div class="metric-value" id="mCurrentIp" style="font-size:15px">--</div>
+          <div class="metric-sub" id="mCurrentIpSub">加入房间后自动分配</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">本地节点状态 (ZT NODE)</div>
+          <div class="metric-value" id="mNodeState" style="font-size:14px">CONNECTING</div>
+          <div class="metric-sub">UDP 9995 监听中</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">控制器连接 (CONTROLLER)</div>
+          <div class="metric-value" id="mGatewayState" style="font-size:14px">ONLINE</div>
+          <div class="metric-sub">172.252.125.40</div>
+        </div>
+      </div>
+
+      <!-- 房间列表表格面板 -->
+      <div class="panel-box">
+        <div class="table-toolbar">
+          <div class="toolbar-left">
+            <input class="input-text" id="searchInput" placeholder="搜索文明6房间名 / ID..." style="width:170px">
+            <div class="civ6-filter-badge" title="当前桥联大厅专用专线">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+              <span>游戏: 文明6 (唯一支持)</span>
+            </div>
+            <select class="select-box hidden" id="gameFilter">
+              <option value="civ6" selected>文明6</option>
+            </select>
+          </div>
+          <div class="toolbar-right">
+            <button class="btn btn-sm btn-primary" id="toggleCreateBtn">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              创建文明6房间
+            </button>
+            <button class="btn btn-sm" id="refreshRoomsBtn">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+              刷新
+            </button>
+          </div>
+        </div>
+
+        <!-- 创建房间抽屉 -->
+        <div class="create-drawer" id="createDrawer">
+          <div class="civ6-select-fixed">
+            <span style="color:var(--fg-subtle);font-size:11px">游戏:</span>
+            <span style="font-weight:700;color:var(--fg)">🏛️ 文明6 (Civ 6)</span>
+            <input type="hidden" id="newRoomGame" value="civ6">
+          </div>
+          <input class="input-text" id="newRoomName" placeholder="文明6 房间名称 (如: 周末标速四人对决)" style="flex:1;min-width:140px">
+          <input class="input-text" id="newRoomPass" placeholder="加入密码 (可选)" type="password" style="width:110px">
+          <button class="btn btn-primary btn-sm" id="submitCreateBtn">创建并进入</button>
+          <button class="btn btn-sm" id="cancelCreateBtn">取消</button>
+        </div>
+
+        <!-- 紧凑表格 -->
+        <div style="overflow-x:auto">
+          <table class="data-table" id="roomsTable">
+            <thead>
+              <tr>
+                <th style="width:50px">ID</th>
+                <th>房间名称</th>
+                <th style="width:100px">游戏</th>
+                <th style="width:160px">网络 ID (NETWORK ID)</th>
+                <th style="width:80px;text-align:right">玩家数</th>
+                <th style="width:80px;text-align:center">模式</th>
+                <th style="width:90px;text-align:right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="roomsTbody">
+              <tr><td colspan="7" style="text-align:center;padding:36px;color:var(--fg-faint)">正在加载大厅房间…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--card-subtle);border-top:1px solid var(--border);font-size:11.5px;color:var(--fg-subtle)">
+          <span id="roomsCountText">共 0 个房间</span>
+          <button class="btn btn-sm" id="showMoreRoomsBtn" style="display:none">加载更多</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== VIEW 2: 房间界面 (带成员与延迟列表) ==================== -->
+    <section id="view-room" class="view-pane">
+
+      <!-- 房间头部 Hero -->
+      <div class="room-hero-box">
+        <div class="room-hero-left">
+          <div class="game-avatar" id="roomAvatar">CIV</div>
+          <div class="room-meta-group">
+            <div class="room-title-line">
+              <span id="roomTitle">房间名称</span>
+              <span class="tag" id="roomGameTag">文明6</span>
+              <span class="tag host hidden" id="roomHostTag">你是房主</span>
+            </div>
+            <div class="room-sub-line">
+              <span>房间 ID: <strong class="mono" id="roomMetaId">#0</strong></span>
+              <span>•</span>
+              <span>虚拟网络: <strong class="mono" id="roomMetaNwid" style="cursor:pointer" title="点击复制">----------------</strong></span>
+            </div>
+          </div>
+        </div>
+        <div class="room-hero-actions">
+          <button class="btn btn-sm" id="btnBackLobby">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            浏览大厅
+          </button>
+          <button class="btn btn-sm" id="btnRefreshMembers">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+            测速刷新
+          </button>
+          <button class="btn btn-sm btn-danger" id="btnLeaveRoom">离开房间</button>
+          <button class="btn btn-sm btn-danger hidden" id="btnDismissRoom">解散房间</button>
+        </div>
+      </div>
+
+      <!-- 智能快速联机直连指引卡 -->
+      <div class="quick-connect-banner">
+        <div class="connect-ip-wrap">
+          <div>
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--fg-subtle)">你的局域网直连 IP</div>
+            <div class="connect-ip-val" id="roomMyIp">10.147.x.x</div>
+          </div>
+          <button class="btn btn-primary btn-sm" id="btnCopyMyIp">复制 IP 直连</button>
+        </div>
+        <div class="connect-hint" id="roomGameGuide">
+          🎮 <strong>联机指导</strong>: 告诉朋友在游戏内选择【多人模式】→【局域网/直接连接】，输入你复制的虚拟 IP 即可秒级进入你的游戏！
+        </div>
+      </div>
+
+      <!-- 房间聊天(局域网 P2P) -->
+      <div class="panel-box" id="chatPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
+            房间聊天 (Room Chat)
+          </div>
+          <span style="font-size:11px;color:var(--fg-subtle)">局域网直连 · 不经服务器 · 仅在线保留</span>
+        </div>
+        <div id="chatHint" class="hidden" style="padding:24px;text-align:center;color:var(--fg-subtle);font-size:12.5px">
+          加入房间后即可与成员聊天
+        </div>
+        <div id="chatMain" class="hidden" style="display:flex;min-height:300px">
+          <div style="width:150px;border-right:1px solid var(--border);flex:none">
+            <div style="padding:8px 14px;font-size:12px;font-weight:600;border-bottom:1px solid var(--border)">在线成员</div>
+            <div id="chatMembers" style="padding:4px 0"></div>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+            <div style="flex:1;overflow-y:auto;padding:12px 14px">
+              <div id="chatMsgList" style="display:flex;flex-direction:column;gap:8px"></div>
+            </div>
+            <div style="border-top:1px solid var(--border);padding:10px 14px;display:flex;gap:8px;align-items:center">
+              <input class="input-text" id="chatInput" placeholder="输入消息，回车发送…" style="flex:1" disabled>
+              <button class="btn btn-sm btn-primary" id="chatSendBtn" disabled>发送</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 房间成员与延迟列表面板 (用户核心诉求！) -->
+      <div class="panel-box">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+            房间在线成员与往返延迟 (Room Members & Latency Ping)
+          </div>
+          <span style="font-size:11px;color:var(--fg-subtle)" id="membersCountSummary">0 位成员在线</span>
+        </div>
+
+        <div style="overflow-x:auto">
+          <table class="data-table" id="membersTable">
+            <thead>
+              <tr>
+                <th>玩家成员 (PLAYER)</th>
+                <th style="width:160px">虚拟 IP (VIRTUAL IP)</th>
+                <th style="width:130px">节点 ID (NODE ID)</th>
+                <th style="width:110px">状态 (STATE)</th>
+                <th style="width:140px">往返延迟 (PING)</th>
+                <th style="width:80px;text-align:right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="membersTbody">
+              <tr><td colspan="6" style="text-align:center;padding:32px;color:var(--fg-faint)">正在探测房间内对端玩家与延迟…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="padding:8px 12px;background:var(--card-subtle);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--fg-subtle)">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span style="display:flex;align-items:center;gap:4px"><span class="ping-dot excellent"></span> &lt;35ms 极佳</span>
+            <span style="display:flex;align-items:center;gap:4px"><span class="ping-dot good"></span> 35-80ms 良好</span>
+            <span style="display:flex;align-items:center;gap:4px"><span class="ping-dot fair"></span> &gt;80ms 偏高</span>
+          </div>
+          <span>后台自动测速中</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== VIEW 3: 控制台与排障 ==================== -->
+    <section id="view-console" class="view-pane">
+      <div class="metrics-strip">
+        <div class="metric-card">
+          <div class="metric-label">本地服务监听</div>
+          <div class="metric-value" style="font-size:15px">127.0.0.1:8899</div>
+          <div class="metric-sub">内嵌 HTTP 桥接</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">ZeroTier 本地端口</div>
+          <div class="metric-value" style="font-size:15px">UDP 9995</div>
+          <div class="metric-sub">独立运行实例</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">网卡设备</div>
+          <div class="metric-value" id="consoleDevice" style="font-size:15px">zt0</div>
+          <div class="metric-sub">虚拟以太网驱动</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">控制器地址</div>
+          <div class="metric-value" id="consoleServer" style="font-size:15px">172.252.125.40</div>
+          <div class="metric-sub">API 代理就绪</div>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <div class="panel-header">
+          <div class="panel-title">客户端运行日志 (client.log)</div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm" id="btnRefreshLogs">刷新日志</button>
+            <button class="btn btn-sm" id="btnCopyLogs">复制全部</button>
+          </div>
+        </div>
+        <div style="padding:0">
+          <pre class="console-box" id="consoleLogs">正在拉取日志…</pre>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- 登录/注册模态 -->
+<div class="modal-overlay" id="authModal">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <span id="authModalTitle">登录桥联账号</span>
+      <button class="btn btn-sm" style="border:none;background:transparent" id="btnCloseAuthModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label" for="loginUser">用户名</label>
+        <input class="input-text" id="loginUser" placeholder="请输入联机用户名" autofocus>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="loginPass">密码</label>
+        <input class="input-text" id="loginPass" type="password" placeholder="请输入密码 (至少4位)">
+      </div>
+      <div style="font-size:11px;color:var(--fg-faint)">首次使用可直接点击「注册」，用户名密码将自动在远端登记。</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="btnDoRegister">注册新账号</button>
+      <button class="btn btn-primary" id="btnDoLogin">登录</button>
+    </div>
+  </div>
+</div>
+
+<!-- 房间密码模态 -->
+<div class="modal-overlay" id="passModal">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <span>输入房间密码</span>
+      <button class="btn btn-sm" style="border:none;background:transparent" id="btnClosePassModal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">加密房间保护</label>
+        <input class="input-text" id="joinPasswordInput" type="password" placeholder="请输入房间加入密码" autofocus>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="btnCancelPass">取消</button>
+      <button class="btn btn-primary" id="btnConfirmPass">加入房间</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+/* =========================================================================
+   桥联 LANBridge 客户端控制台
+   ========================================================================= */
+
+const $ = id => document.getElementById(id);
+
+let state = {
+  me: null,
+  config: null,
+  nodeId: '',
+  assignedIp: '',
+  currentRoom: null, // { room_id, network_id, name, game, is_owner }
+  joined: false,
+  rooms: [],
+  members: [],       // [{ name, user_id, zt_node_id, assigned_ip, is_owner, latency }]
+  memberLatency: {}, // ip/node_id -> number
+  searchQuery: '',
+  gameFilter: '',
+  showLimit: 30,
+  currentView: 'view-lobby'
+};
+
+function toast(msg, isErr = false) {
+  const container = $('toast-container');
+  const el = document.createElement('div');
+  el.className = 'toast-item ' + (isErr ? 'err' : '');
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+function copyText(str, label = '内容') {
+  if (!str) return;
+  navigator.clipboard.writeText(str).then(() => {
+    toast(`已复制${label}: ${str}`);
+  }).catch(() => {
+    toast(`复制失败: ${str}`, true);
+  });
+}
+
+async function api(path, body) {
+  const opt = body !== undefined ? {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  } : {};
+  const res = await fetch(path, opt);
+  const json = await res.json().catch(() => ({ ok: false, error: '网络响应非有效 JSON' }));
+  if (!json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+  return json.data;
+}
+
+function gameLabel(g) {
+  return '文明6';
+}
+
+function gameShort(g) {
+  return 'CIV6';
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* 房间断开操作 */
+async function leaveCurrentRoom() {
+  if (state.joined || state.currentRoom) {
+    await api('/api/room/leave', {}).catch(() => {});
+    await api('/api/zt/join', { network_id: '', leave: 'all' }).catch(() => {});
+  }
+  state.currentRoom = null;
+  state.joined = false;
+  state.assignedIp = '';
+  stopRoomPoll();
+  lastHeartbeatAt = 0;
+  $('pillRoom').classList.add('hidden');
+  $('lobbyBackBar').classList.add('hidden');
+  $('mCurrentIp').textContent = '--';
+  toast('已离开房间');
+  switchView('view-lobby');
+  await loadRooms();
+  syncZT();
+}
+
+/* ---------- 视图切换 (聪明的状态驱动) ---------- */
+function switchView(viewId) {
+  state.currentView = viewId;
+  document.querySelectorAll('.view-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-pill').forEach(b => b.classList.remove('active'));
+
+  $(viewId).classList.add('active');
+  const activeBtn = Array.from(document.querySelectorAll('.nav-pill')).find(b => b.getAttribute('data-view') === viewId);
+  if (activeBtn) activeBtn.classList.add('active');
+
+  if (viewId === 'view-room') {
+    updateRoomView();
+    chatSyncState();
+    // 不等 joined：Windows 首次进房时本地 ZeroTier 还没拿到 IP，
+    // 但成员列表是服务端数据，此刻就能拉，否则要手动点刷新才出现。
+    if (state.currentRoom) loadMembersAndPing();
+  }
+  if (viewId === 'view-console') {
+    loadLogs();
+  }
+}
+
+document.querySelectorAll('.nav-pill').forEach(btn => {
+  btn.onclick = () => switchView(btn.getAttribute('data-view'));
+});
+$('brandBtn').onclick = () => switchView(state.joined ? 'view-room' : 'view-lobby');
+$('btnBackLobby').onclick = () => switchView('view-lobby');
+$('lobbyBackBar').onclick = () => switchView('view-room');
+
+/* ---------- 本机 ZeroTier 状态同步 ---------- */
+async function syncZT() {
+  const dot = $('nodeDot');
+  const text = $('nodePillText');
+  try {
+    const d = await api('/api/zt/status');
+    state.nodeId = d.node_id || '';
+    dot.className = 'status-dot ok';
+    text.textContent = `Node: ${d.node_id.slice(0, 8)}…`;
+    $('mNodeState').textContent = 'READY';
+
+    const net = (d.networks || [])[0];
+    if (net && net.ips && net.ips.length) {
+      state.assignedIp = net.ips[0].replace('/24', '');
+      $('mCurrentIp').textContent = state.assignedIp;
+      $('mCurrentIpSub').textContent = `网络: ${net.network_id.slice(0, 10)}…`;
+    }
+  } catch(e) {
+    dot.className = 'status-dot err';
+    text.textContent = 'ZeroTier 离线';
+    $('mNodeState').textContent = 'OFFLINE';
+  }
+}
+
+$('nodePill').onclick = () => {
+  if (state.nodeId) copyText(state.nodeId, 'ZeroTier Node ID');
+  else toast('ZeroTier 尚未就绪', true);
+};
+
+/* ---------- 大厅房间列表 ---------- */
+$('searchInput').oninput = e => {
+  state.searchQuery = e.target.value.toLowerCase();
+  renderRooms();
+};
+$('gameFilter').onchange = e => {
+  state.gameFilter = e.target.value;
+  renderRooms();
+};
+$('refreshRoomsBtn').onclick = () => loadRooms(true);
+
+async function loadRooms(manual = false) {
+  const btn = $('refreshRoomsBtn');
+  const table = $('roomsTable');
+  if (manual && btn) {
+    btn.disabled = true;
+    btn.classList.add('spinning');
+    if (table) table.classList.add('table-refreshing');
+  }
+  try {
+    const rooms = await api('/api/rooms');
+    state.rooms = rooms || [];
+    $('mTotalRooms').textContent = String(state.rooms.length);
+    renderRooms();
+    if (manual) {
+      toast(`大厅房间已刷新 (共 ${state.rooms.length} 间)`);
+    }
+  } catch(e) {
+    if (manual) {
+      toast(`刷新失败: ${e.message}`, true);
+    }
+  } finally {
+    if (manual && btn) {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.classList.remove('spinning');
+        if (table) table.classList.remove('table-refreshing');
+      }, 350);
+    }
+  }
+}
+
+function renderRooms() {
+  const tbody = $('roomsTbody');
+  let list = state.rooms.slice();
+
+  if (state.searchQuery) {
+    list = list.filter(r => r.name.toLowerCase().includes(state.searchQuery) || String(r.id).includes(state.searchQuery));
+  }
+  if (state.gameFilter) {
+    list = list.filter(r => !r.game || r.game === 'civ6' || r.game === state.gameFilter);
+  }
+
+  $('roomsCountText').textContent = `显示 ${Math.min(list.length, state.showLimit)} / 共 ${list.length} 个文明6房间`;
+  $('showMoreRoomsBtn').style.display = list.length > state.showLimit ? 'inline-flex' : 'none';
+
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:36px;color:var(--fg-faint)">暂无文明6活动房间，点上方「创建文明6房间」即可一键开局</td></tr>`;
+    return;
+  }
+
+  const curId = state.currentRoom ? state.currentRoom.room_id : null;
+  const visible = list.slice(0, state.showLimit);
+
+  tbody.innerHTML = visible.map(r => {
+    const isCurrent = curId && curId === r.id;
+    return `
+      <tr class="${isCurrent ? 'current-row' : ''}">
+        <td class="mono" style="color:var(--fg-faint)">#${r.id}</td>
+        <td>
+          <div style="font-weight:600;display:flex;align-items:center;gap:6px">
+            <span>${escapeHtml(r.name)}</span>
+            ${isCurrent ? '<span class="tag you" style="font-size:10px">当前所在</span>' : ''}
+          </div>
+        </td>
+        <td><span class="tag">${escapeHtml(gameLabel(r.game))}</span></td>
+        <td class="mono" style="cursor:pointer;color:var(--fg-muted)" onclick="copyText('${r.network_id}','网络 ID')">
+          ${r.network_id}
+        </td>
+        <td class="mono" style="text-align:right;font-weight:600">${r.user_count} 人</td>
+        <td style="text-align:center">
+          ${r.password_required ? '<span style="color:#f59e0b;font-size:11px">🔒 密码</span>' : '<span style="color:var(--fg-faint);font-size:11px">公开</span>'}
+        </td>
+        <td style="text-align:right">
+          ${isCurrent ? `
+            <button class="btn btn-sm" onclick="switchView('view-room')">进入房间 →</button>
+          ` : `
+            <button class="btn btn-sm ${r.password_required ? '' : 'btn-primary'}" onclick="handleJoinClick(${r.id}, ${r.password_required})">
+              ${curId ? '切换' : '加入'}
+            </button>
+          `}
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+/* ---------- 创建房间抽屉 ---------- */
+const drawer = $('createDrawer');
+$('toggleCreateBtn').onclick = () => drawer.classList.toggle('open');
+$('cancelCreateBtn').onclick = () => drawer.classList.remove('open');
+
+$('submitCreateBtn').onclick = async () => {
+  const name = $('newRoomName').value.trim();
+  const game = 'civ6'; // 桥联大厅专供文明6
+  const password = $('newRoomPass').value;
+  if (!name) return toast('请输入文明6房间名称', true);
+  if (!state.nodeId) return toast('ZeroTier 本地节点尚未就绪', true);
+
+  $('submitCreateBtn').disabled = true;
+  $('submitCreateBtn').textContent = '创建中…';
+  try {
+    const res = await api('/api/room/create', { game, name, password, zt_node_id: state.nodeId });
+    await api('/api/zt/join', { network_id: res.network_id });
+    toast('房间已创建，正在等待网络连接');
+    $('newRoomName').value = '';
+    $('newRoomPass').value = '';
+    drawer.classList.remove('open');
+    await pollRoomStatus();
+    await loadRooms();
+    // 关键优化: 创建成功后自动无缝切换到房间界面！
+    switchView('view-room');
+  } catch(e) {
+    toast(e.message, true);
+  } finally {
+    $('submitCreateBtn').disabled = false;
+    $('submitCreateBtn').textContent = '创建并进入';
+  }
+};
+
+/* ---------- 加入房间与密码弹层 ---------- */
+let pendingJoinId = null;
+window.handleJoinClick = (roomId, hasPass) => {
+  if (hasPass) {
+    pendingJoinId = roomId;
+    $('joinPasswordInput').value = '';
+    $('passModal').classList.add('open');
+    $('joinPasswordInput').focus();
+  } else {
+    executeJoin(roomId, '');
+  }
+};
+
+$('btnClosePassModal').onclick = () => $('passModal').classList.remove('open');
+$('btnCancelPass').onclick = () => $('passModal').classList.remove('open');
+$('btnConfirmPass').onclick = () => {
+  const pw = $('joinPasswordInput').value;
+  $('passModal').classList.remove('open');
+  if (pendingJoinId) executeJoin(pendingJoinId, pw);
+};
+
+async function executeJoin(roomId, password) {
+  if (!state.nodeId) return toast('ZeroTier 本地节点未就绪', true);
+  toast('正在加入房间并建立虚拟网络…');
+  try {
+    const res = await api('/api/room/join', { room_id: roomId, password, zt_node_id: state.nodeId });
+    await api('/api/zt/join', { network_id: res.network_id });
+    $('mCurrentIp').textContent = '正在下发…';
+    switchView('view-room');
+    await pollRoomStatus();
+    await loadRooms();
+    toast('已加入房间，正在等待网络连接');
+  } catch(e) {
+    toast(e.message, true);
+  }}
+
+/* ---------- 离开 / 解散房间 ---------- */
+window.leaveCurrentRoom = leaveCurrentRoom;
+$('btnLeaveRoom').onclick = leaveCurrentRoom;
+
+$('btnDismissRoom').onclick = async () => {
+  if (!state.currentRoom) return;
+  if (!confirm('解散房间将销毁网络，其他玩家也将断开。确认解散？')) return;
+  try {
+    await api('/api/room/dismiss', { room_id: state.currentRoom.room_id });
+    await api('/api/zt/join', { network_id: '', leave: 'all' });
+    toast('文明6 房间已解散');
+    state.currentRoom = null;
+    state.joined = false;
+    state.assignedIp = '';
+    stopRoomPoll();
+    lastHeartbeatAt = 0;
+    $('pillRoom').classList.add('hidden');
+    $('lobbyBackBar').classList.add('hidden');
+    $('mCurrentIp').textContent = '--';
+    switchView('view-lobby');
+    await loadRooms();
+    syncZT();
+  } catch(e) {
+    toast(e.message, true);
+  }
+};
+
+/* ---------- 房间状态轮询 ---------- */
+// 按状态分档自调度，不用固定 setInterval：
+//   未授权 2s（尽快完成授权闭环）/ 已授权 30s（只为感知房被销毁、被踢）/ 不在房间则停。
+// 服务端已改成授权只做一次，所以这里降到 30s 不会拖慢任何东西。
+const POLL_FAST = 2000;
+const POLL_SLOW = 30000;
+const HEARTBEAT_INTERVAL = 60000;
+let roomStatusPolling = false;
+let roomStatusTimer = null;
+let lastHeartbeatAt = 0;
+
+function scheduleRoomPoll(delay) {
+  if (roomStatusTimer) clearTimeout(roomStatusTimer);
+  roomStatusTimer = setTimeout(pollRoomStatus, delay);
+}
+
+function stopRoomPoll() {
+  if (roomStatusTimer) {
+    clearTimeout(roomStatusTimer);
+    roomStatusTimer = null;
+  }
+}
+
+// 业务保活：只更新房间活跃时间，不碰控制器；服务端另有 60s 节流。
+function sendHeartbeat() {
+  if (!state.currentRoom || state.currentView !== 'view-room') return;
+  if (Date.now() - lastHeartbeatAt < HEARTBEAT_INTERVAL) return;
+  lastHeartbeatAt = Date.now();
+  api('/api/room/heartbeat', {}).catch(() => {});
+}
+
+async function pollRoomStatus() {
+  if (roomStatusPolling) return;
+  roomStatusPolling = true;
+  let nextDelay = POLL_SLOW;
+  try {
+    const d = await api('/api/join/status');
+    if (!d.joined) {
+      if (state.joined) {
+        toast('房间已被销毁或关闭');
+      }
+      state.joined = false;
+      state.currentRoom = null;
+      $('pillRoom').classList.add('hidden');
+      $('lobbyBackBar').classList.add('hidden');
+      $('mCurrentIp').textContent = '--';
+      if (state.currentView === 'view-room') switchView('view-lobby');
+      stopRoomPoll();
+      return;
+    }
+    state.joined = false;
+    state.assignedIp = '';
+    state.currentRoom = d;
+    // 还没授权就快轮询，授权后降频
+    nextDelay = d.authorized ? POLL_SLOW : POLL_FAST;
+
+    // 拉取用户详情获取房间名称和身份
+    try {
+      const me = await api('/api/me');
+      state.me = me;
+      $('userName').textContent = me.name || '已登录';
+      if (me.room_name) state.currentRoom.name = me.room_name;
+    } catch(e) {}
+
+    // 本地检查网卡获取虚拟 IP
+    try {
+      const zt = await api('/api/zt/status');
+      const net = (zt.networks || []).find(n => n.network_id === d.network_id);
+      if (d.authorized && net && net.status === 'OK' && net.ips && net.ips.length) {
+        state.assignedIp = net.ips[0].split('/')[0];
+        state.joined = true;
+      }
+    } catch(e) {}
+
+    // 更新界面状态
+    $('pillRoom').classList.remove('hidden');
+    $('lobbyBackBar').classList.remove('hidden');
+    $('lobbyActiveRoomName').textContent = state.currentRoom.name || `房间 #${state.currentRoom.room_id}`;
+    $('lobbyActiveIp').textContent = state.assignedIp || '10.147.x.x';
+    $('mCurrentIp').textContent = state.assignedIp || '正在下发…';
+
+    if (state.currentView === 'view-room') {
+      updateRoomView();
+    }
+    sendHeartbeat();
+  } catch(e) {
+    // 网络异常不加速轮询，避免离线和服务器故障时放大请求
+  }
+  finally {
+    roomStatusPolling = false;
+    if (state.currentRoom) scheduleRoomPoll(nextDelay);
+  }
+}
+
+/* ---------- 房间工作台渲染 ---------- */
+// 判断成员是不是本机。名称比较单独不够可靠：首次进房时 /api/me 可能还没回来，
+// 会把本机当成别人去测速。节点 ID / 虚拟 IP 是更硬的判据。
+function isSelfMember(m) {
+  if (!m) return false;
+  if (!m.zt_node_id && !m.assigned_ip && !m.name) return false;
+  const node = (state.nodeId || '').toLowerCase();
+  if (node && m.zt_node_id && m.zt_node_id.toLowerCase() === node) return true;
+  if (state.assignedIp && m.assigned_ip && m.assigned_ip === state.assignedIp) return true;
+  if (state.me) {
+    if (state.me.name && m.name === state.me.name) return true;
+    const meNode = (state.me.zt_node_id || '').toLowerCase();
+    if (meNode && m.zt_node_id && m.zt_node_id.toLowerCase() === meNode) return true;
+  }
+  return false;
+}
+
+function updateRoomView() {
+  if (!state.currentRoom) return;
+  const cr = state.currentRoom;
+  const ip = state.assignedIp || cr.ip || '10.147.x.x';
+
+  // 找房间元数据
+  const roomObj = state.rooms.find(r => r.id === cr.room_id);
+  const gameKey = roomObj ? roomObj.game : (cr.game || 'civ6');
+  const roomName = (roomObj ? roomObj.name : cr.name) || `房间 #${cr.room_id}`;
+  const isOwner = (roomObj && state.me) ? (roomObj.owner_id === state.me.id) : (state.me && state.me.room_id === cr.room_id);
+
+  $('roomAvatar').textContent = 'CIV6';
+  $('roomTitle').textContent = roomName;
+  $('roomGameTag').textContent = '文明6';
+  $('roomHostTag').classList.toggle('hidden', !isOwner);
+  $('btnDismissRoom').classList.toggle('hidden', !isOwner);
+
+  $('roomMetaId').textContent = `#${cr.room_id}`;
+  $('roomMetaNwid').textContent = cr.network_id;
+  $('roomMetaNwid').onclick = () => copyText(cr.network_id, '虚拟网络 ID');
+
+  $('roomMyIp').textContent = ip;
+  $('btnCopyMyIp').onclick = () => copyText(ip, '虚拟联机 IP');
+
+  // 文明6专属联机提示
+  $('roomGameGuide').innerHTML = `
+    🎮 <strong>文明6 联机指南</strong>: 房主在《文明6》主菜单选择【多人游戏】→【局域网】，点击【创建游戏】；好友在【局域网】点击【直接连接】，输入房主虚拟 IP <code>${escapeHtml(ip)}</code> 即可秒级进入游戏！
+  `;
+}
+
+/* ---------- 房间成员与往返延迟探测 (核心功能！) ---------- */
+$('btnRefreshMembers').onclick = () => loadMembersAndPing(true);
+
+async function loadMembersAndPing(manual = false) {
+  const btn = $('btnRefreshMembers');
+  const table = $('membersTable');
+  if (manual && btn) {
+    btn.disabled = true;
+    btn.classList.add('spinning');
+    if (table) table.classList.add('table-refreshing');
+  }
+  if (!state.currentRoom) return;
+  const roomId = state.currentRoom.room_id;
+
+  let members = [];
+  try {
+    members = await api(`/api/room/members?room_id=${roomId}`);
+  } catch(e) {
+    // 优雅 fallback: 若远端无该路由，基于已有的 me 与 peers 构造
+    members = [];
+    if (state.me) {
+      members.push({
+        user_id: state.me.id || 1,
+        name: state.me.name || '我',
+        zt_node_id: state.nodeId || '',
+        assigned_ip: state.assignedIp || '',
+        is_owner: true
+      });
+    }
+    // 加入探测到的 peers
+    try {
+      const peers = await api('/api/zt/peers');
+      for (const p of (peers || [])) {
+        if (p.address && p.address !== state.nodeId && p.role === 'LEAF') {
+          members.push({
+            user_id: 0,
+            name: `玩家 (${p.address.slice(0, 6)})`,
+            zt_node_id: p.address,
+            assigned_ip: '',
+            is_owner: false
+          });
+        }
+      }
+    } catch(e2) {}
+  }
+
+  state.members = members || [];
+  $('membersCountSummary').textContent = `${state.members.length} 位成员在房间中`;
+
+  renderMembersTable();
+
+  // 并发测速每个成员（本机不测）
+  const pingPromises = state.members.map(m => {
+    if (isSelfMember(m)) {
+      state.memberLatency[m.zt_node_id || m.assigned_ip || 'me'] = 0;
+      return Promise.resolve();
+    }
+    return pingMember(m);
+  });
+
+  await Promise.allSettled(pingPromises);
+
+  if (manual) {
+    toast(`成员延迟测速已更新 (共 ${state.members.length} 位成员)`);
+    if (btn) {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.classList.remove('spinning');
+        if (table) table.classList.remove('table-refreshing');
+      }, 350);
+    }
+  }
+}
+
+async function pingMember(m) {
+  const key = m.zt_node_id || m.assigned_ip;
+  if (!key) return;
+  try {
+    const res = await api(`/api/ping?ip=${encodeURIComponent(m.assigned_ip || '')}&node_id=${encodeURIComponent(m.zt_node_id || '')}`);
+    state.memberLatency[key] = res.latency;
+  } catch(e) {
+    state.memberLatency[key] = -1;
+  }
+  updateMemberRowPing(m);
+}
+
+function renderMembersTable() {
+  const tbody = $('membersTbody');
+  if (!state.members.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--fg-faint)">暂无在线成员数据</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = state.members.map(m => {
+    const isMe = isSelfMember(m);
+    const key = m.zt_node_id || m.assigned_ip;
+    const lat = state.memberLatency[key];
+
+    return `
+      <tr id="member-row-${escapeHtml(key)}">
+        <td>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:24px;height:24px;border-radius:4px;background:var(--card-subtle);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;color:var(--fg-subtle)">
+              ${m.name.slice(0, 1).toUpperCase()}
+            </div>
+            <span style="font-weight:600">${escapeHtml(m.name)}</span>
+            ${m.is_owner ? '<span class="tag host">房主</span>' : ''}
+            ${isMe ? '<span class="tag you">你</span>' : ''}
+          </div>
+        </td>
+        <td class="mono">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="color:var(--accent);font-weight:600">${m.assigned_ip || '--'}</span>
+            ${m.assigned_ip ? `<button class="btn btn-sm" style="padding:1px 5px" onclick="copyText('${m.assigned_ip}','玩家 IP')">复制</button>` : ''}
+          </div>
+        </td>
+        <td class="mono" style="color:var(--fg-muted)">${m.zt_node_id || '--'}</td>
+        <td>
+          <span style="display:inline-flex;align-items:center;gap:5px;color:var(--ok);font-size:11.5px;font-weight:500">
+            <span class="ping-dot excellent"></span> 已就绪
+          </span>
+        </td>
+        <td class="ping-cell">
+          ${renderPingBadge(lat, isMe)}
+        </td>
+        <td style="text-align:right">
+          ${isMe ? '<span style="color:var(--fg-faint);font-size:11px">本机</span>' : `
+            <button class="btn btn-sm" onclick="rePingSingle('${escapeHtml(m.assigned_ip || '')}','${escapeHtml(m.zt_node_id || '')}', this)">测速</button>
+          `}
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderPingBadge(lat, isMe) {
+  if (isMe) {
+    return `<span class="latency-indicator" style="color:var(--ok)"><span class="ping-dot excellent"></span> 0 ms <span style="font-size:10px;color:var(--fg-faint);font-weight:normal">(本机)</span></span>`;
+  }
+  if (lat === undefined) {
+    return `<span class="latency-indicator" style="color:var(--fg-faint)"><span class="ping-dot timeout"></span> 探测中…</span>`;
+  }
+  if (lat < 0) {
+    return `<span class="latency-indicator" style="color:var(--fg-faint)"><span class="ping-dot timeout"></span> 超时 / 打洞中</span>`;
+  }
+  let dotClass = 'excellent';
+  let color = 'var(--ok)';
+  if (lat > 80) {
+    dotClass = 'fair';
+    color = 'var(--warn)';
+  } else if (lat > 35) {
+    dotClass = 'good';
+    color = 'var(--accent)';
+  }
+  return `<span class="latency-indicator" style="color:${color}"><span class="ping-dot ${dotClass}"></span> ${lat} ms</span>`;
+}
+
+function updateMemberRowPing(m) {
+  const key = m.zt_node_id || m.assigned_ip;
+  const row = $(`member-row-${key}`);
+  if (!row) return;
+  const isMe = isSelfMember(m);
+  const lat = state.memberLatency[key];
+  const cell = row.querySelector('.ping-cell');
+  if (cell) cell.innerHTML = renderPingBadge(lat, isMe);
+}
+
+window.rePingSingle = async (ip, nodeId, btnEl) => {
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = '测速中…';
+  }
+  const key = nodeId || ip;
+  state.memberLatency[key] = undefined;
+  const row = $(`member-row-${key}`);
+  if (row) {
+    const cell = row.querySelector('.ping-cell');
+    if (cell) cell.innerHTML = renderPingBadge(undefined, false);
+  }
+  try {
+    const res = await api(`/api/ping?ip=${encodeURIComponent(ip)}&node_id=${encodeURIComponent(nodeId)}`);
+    state.memberLatency[key] = res.latency;
+    if (btnEl) toast(`Ping 响应: ${res.latency >= 0 ? res.latency + ' ms' : '超时'}`);
+  } catch(e) {
+    state.memberLatency[key] = -1;
+  }
+  if (row) {
+    const cell = row.querySelector('.ping-cell');
+    if (cell) cell.innerHTML = renderPingBadge(state.memberLatency[key], false);
+  }
+  if (btnEl) {
+    setTimeout(() => {
+      btnEl.disabled = false;
+      btnEl.textContent = '测速';
+    }, 350);
+  }
+};
+
+/* ---------- 控制台日志 ---------- */
+async function loadLogs(manual = false) {
+  const btn = $('btnRefreshLogs');
+  const box = $('consoleLogs');
+  if (manual && btn) {
+    btn.disabled = true;
+    btn.classList.add('spinning');
+  }
+  try {
+    const res = await api('/api/logs');
+    box.textContent = res.logs || '暂无日志记录';
+    box.scrollTop = box.scrollHeight;
+    if (manual) toast('运行日志已刷新');
+  } catch(e) {
+    box.textContent = '获取日志失败: ' + e.message;
+    if (manual) toast('获取日志失败: ' + e.message, true);
+  } finally {
+    if (manual && btn) {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.classList.remove('spinning');
+      }, 350);
+    }
+  }
+}
+$('btnRefreshLogs').onclick = () => loadLogs(true);
+$('btnCopyLogs').onclick = () => copyText($('consoleLogs').textContent, '运行日志');
+
+/* ---------- 登录 / 注册模态 ---------- */
+const authModal = $('authModal');
+$('authBtn').onclick = () => {
+  if (state.me) {
+    if (confirm(`当前已登录为 ${state.me.name}，是否注销退出？`)) {
+      api('/api/room/leave', {}).catch(() => {});
+      location.reload();
+    }
+  } else {
+    authModal.classList.add('open');
+    $('loginUser').focus();
+  }
+};
+$('btnCloseAuthModal').onclick = () => authModal.classList.remove('open');
+authModal.onclick = e => { if (e.target === authModal) authModal.classList.remove('open'); };
+
+$('btnDoLogin').onclick = () => handleAuth('/api/login');
+$('btnDoRegister').onclick = () => handleAuth('/api/register');
+
+async function handleAuth(url) {
+  const name = $('loginUser').value.trim();
+  const password = $('loginPass').value;
+  if (!name || !password) return toast('请输入用户名和密码', true);
+  try {
+    await api(url, { name, password });
+    toast(url.includes('register') ? '注册成功，已自动登录' : '登录成功');
+    authModal.classList.remove('open');
+    await init();
+  } catch(e) {
+    toast(e.message, true);
+  }
+}
+
+/* ---------- 定时自动刷新 ---------- */
+setInterval(() => {
+  if (state.currentView === 'view-room' && state.currentRoom) {
+    loadMembersAndPing();
+  } else if (state.currentView === 'view-lobby') {
+    loadRooms();
+  }
+}, 4500);
+
+/* ---- 网络状态（诊断信息位于控制台视图） ---- */
+/* =========================================================================
+   房间聊天(局域网 P2P):房间成员之间互发文字消息
+   数据面:浏览器直接 HTTP 到对方虚拟 IP 的 8890 端口,不经房间服务器。
+   消息仅在线保留(内存最近 500 条),不做离线投递和历史持久化。
+   ========================================================================= */
+const chat = {
+  msgs: [],
+  renderedIds: new Set(),
+  // 送达状态按消息 ID 单独保存:消息会从对端重新拉取并覆盖本地对象,
+  // 挂在消息对象上的 delivery 会被冲掉,所以不能放一起。
+  delivery: new Map(),
+  msgKey: '',
+  membersAt: 0,
+  busy: false,
+  textPending: false
+};
+
+function chatPeers() {
+  return state.members.filter(m => !isSelfMember(m) && m.assigned_ip);
+}
+
+function chatBaseUrl(ip) { return `http://${ip}:8890`; }
+
+function chatNetParam() {
+  return encodeURIComponent((state.currentRoom && state.currentRoom.network_id) || '');
+}
+
+async function chatSyncState() {
+  // 面板显示与网络就绪解耦：只要进了房间就把聊天界面渲染出来，
+  // 否则 Windows 首次进房(ZeroTier 还在授权/拿 IP)时会整个面板都看不到。
+  const inRoom = !!state.currentRoom;
+  const ready = !!(state.joined && state.currentRoom);
+  $('chatHint').classList.toggle('hidden', inRoom);
+  $('chatMain').classList.toggle('hidden', !inRoom);
+  if (!inRoom) {
+    chat.msgs = [];
+    chat.renderedIds.clear();
+    chat.delivery.clear();
+    chat.msgKey = '';
+    $('chatMembers').innerHTML = '';
+    $('chatMsgList').innerHTML = '';
+    return;
+  }
+  const key = `${state.currentRoom.room_id}:${(state.me && state.me.name) || '我'}`;
+  if (chat.msgKey !== key) {
+    chat.msgKey = key;
+    chat.msgs = [];
+    chat.renderedIds.clear();
+    chat.delivery.clear();
+    chat.membersAt = 0;
+  }
+  const input = $('chatInput');
+  // 网络没就绪时先把界面摆出来，但发送要等拿到虚拟 IP，否则发出去必然失败
+  input.disabled = !ready;
+  input.placeholder = ready ? '输入消息，回车发送…' : '正在等待网络就绪…';
+  $('chatSendBtn').disabled = !ready || chat.textPending;
+  // 成员列表节流刷新(供聊天成员栏与发送目标)
+  if (ready && Date.now() - chat.membersAt > 12000) {
+    chat.membersAt = Date.now();
+    loadMembersAndPing().then(chatRenderMembers).catch(() => {});
+  }
+  if (ready) chatPollRemotes();
+}
+
+// 轮询所有成员(含自己)的 8890,合并去重渲染
+async function chatPollRemotes() {
+  if (chat.busy) return;
+  chat.busy = true;
+  try {
+    const net = chatNetParam();
+    const targets = [{ ip: state.assignedIp || '127.0.0.1' }, ...chatPeers().map(m => ({ ip: m.assigned_ip }))];
+    const lists = await Promise.all(targets.map(t =>
+      fetch(`${chatBaseUrl(t.ip)}/chat/messages?net=${net}`).then(r => r.json()).catch(() => null)
+    ));
+    let added = false;
+    for (const j of lists) {
+      if (!j || !j.ok) continue;
+      for (const m of (j.data && j.data.messages) || []) {
+        if (!m || !m.id || chat.renderedIds.has(m.id)) continue;
+        chat.renderedIds.add(m.id);
+        chat.msgs.push(m);
+        added = true;
+      }
+    }
+    if (added) {
+      chat.msgs.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      chatRenderMsgs();
+    }
+  } finally {
+    chat.busy = false;
+  }
+}
+
+function chatRenderMembers() {
+  const box = $('chatMembers');
+  if (!state.members.length) {
+    box.innerHTML = `<div style="padding:10px 14px;font-size:12px;color:var(--fg-faint)">暂无成员数据</div>`;
+    return;
+  }
+  box.innerHTML = state.members.map(m => {
+    const isMe = isSelfMember(m);
+    return `<div style="padding:6px 14px;display:flex;align-items:center;gap:8px">
+      <span class="ping-dot ${isMe ? 'excellent' : 'good'}"></span>
+      <span style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.name)}${isMe ? '<span style="color:var(--fg-faint);font-size:11px"> (我)</span>' : ''}</span>
+    </div>`;
+  }).join('');
+}
+
+function chatRenderMsgs() {
+  const box = $('chatMsgList');
+  if (!box) return;
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  box.innerHTML = chat.msgs.map(m => {
+    const fromSelf = state.me && m.name === state.me.name;
+    const align = fromSelf ? 'flex-end' : 'flex-start';
+    const delivery = chat.delivery.get(m.id);
+    const status = delivery
+      ? `<div style="font-size:11px;color:var(--fg-subtle);margin:2px 4px">${escapeHtml(delivery)}</div>`
+      : '';
+    return `<div style="display:flex;flex-direction:column;align-items:${align}">
+      <div style="font-size:11px;color:var(--fg-faint);margin:0 4px 2px">${escapeHtml(m.name)}</div>
+      <div style="background:${fromSelf ? 'var(--accent)' : 'var(--card-subtle)'};color:${fromSelf ? '#fff' : 'var(--fg)'};padding:7px 12px;border-radius:10px;max-width:78%;font-size:13px;line-height:1.5;word-break:break-word">${escapeHtml(m.text || '')}</div>${status}
+    </div>`;
+  }).join('');
+  if (nearBottom) box.scrollTop = box.scrollHeight;
+}
+
+function chatMyName() { return (state.me && state.me.name) || '我'; }
+
+// 发送一条文字消息。送达判定只看其他成员是否返回 stored=本消息 ID，
+// 本机写入只用于本地留痕，不能算作对端送达。
+async function chatSendText() {
+  const input = $('chatInput');
+  const t = input.value.trim();
+  if (!t || chat.textPending || !state.joined || !state.currentRoom) return;
+  const peers = chatPeers();
+  if (!peers.length) return toast('房间内没有其他可接收消息的成员', true);
+  const key = chat.msgKey;
+  const net = chatNetParam();
+  const msg = { id: 'm' + Date.now() + Math.random().toString(36).slice(2, 6), kind: 'text', text: t, ts: Date.now(), name: chatMyName() };
+  const body = JSON.stringify(msg);
+  chat.delivery.set(msg.id, '发送中…');
+  chat.textPending = true;
+  $('chatSendBtn').disabled = true;
+  input.value = '';
+  chat.renderedIds.add(msg.id);
+  chat.msgs.push(msg);
+  chatRenderMsgs();
+  const post = async ip => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const r = await fetch(`${chatBaseUrl(ip)}/chat/send?net=${net}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: controller.signal
+      });
+      const j = await r.json();
+      return r.ok && j.ok && j.data && j.data.stored === msg.id;
+    } catch { return false; } finally { clearTimeout(timer); }
+  };
+  try {
+    const results = await Promise.all(peers.map(peer => post(peer.assigned_ip)));
+    const count = results.filter(Boolean).length;
+    const failed = peers.filter((_, i) => !results[i]).map(peer => peer.name || peer.assigned_ip);
+    const delivery = count === peers.length ? `已送达 ${count}/${peers.length}` : `已确认 ${count}/${peers.length}；未确认：${failed.join('、')}`;
+    chat.delivery.set(msg.id, delivery);
+    if (chat.msgKey === key) {
+      chatRenderMsgs();
+      if (count < peers.length) toast(delivery, true);
+    }
+    // 本机留一条，刷新后自己也能看到（不计入送达数）
+    if (count) post(state.assignedIp || '127.0.0.1');
+  } finally {
+    chat.textPending = false;
+    $('chatSendBtn').disabled = !(state.joined && state.currentRoom);
+  }
+}
+
+$('chatSendBtn').onclick = chatSendText;
+$('chatInput').addEventListener('keydown', e => { if (e.key === 'Enter') chatSendText(); });
+setInterval(() => {
+  if (state.currentView === 'view-room' && state.currentRoom) chatSyncState();
+}, 1500);
+
+/* ---------- 初始化 ---------- */
+async function init() {
+  await syncZT();
+  try {
+    const cfg = await api('/api/config');
+    state.config = cfg;
+    if (cfg.server) {
+      $('mGatewayState').textContent = 'ONLINE';
+      $('consoleServer').textContent = cfg.server.replace('http://', '');
+    }
+    if (cfg.logged_in) {
+      const me = await api('/api/me');
+      state.me = me;
+      $('userName').textContent = me.name;
+      $('authBtn').textContent = '注销';
+    } else {
+      $('userName').textContent = '未登录';
+      $('authBtn').textContent = '登录';
+    }
+  } catch(e) {}
+
+  await loadRooms();
+  await pollRoomStatus();
+
+  // 若刚启动时发现已经在某个房间中，自动平滑切入房间工作台！
+  if (state.joined) {
+    switchView('view-room');
+    chatSyncState();
+  } else {
+    switchView('view-lobby');
+  }
+
+  // pollRoomStatus 自己按状态调度下一次，不用固定 setInterval
+  if (state.currentRoom) scheduleRoomPoll(state.joined ? POLL_SLOW : POLL_FAST);
+  setInterval(syncZT, 8000);
+}
+
+window.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

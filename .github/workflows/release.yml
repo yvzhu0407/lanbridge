@@ -1,0 +1,84 @@
+name: release
+
+# 打 tag（v1.0.0 之类）时构建并发布客户端与服务端产物。
+# 也可以在 Actions 页面手动触发，对已有 tag 重跑（已存在的 Release 会被补传资产）。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的 tag（例如 v1.0.0）
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # 打包必须在 macOS 上做：fetch-zt-embed.sh 解 macOS 的 .pkg 要用 pkgutil。
+  # Windows 侧是用户态 API（无 cgo），可在这台机器上交叉编译。
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - name: 准备内嵌 ZeroTier
+        run: |
+          # msiextract 用来解 ZeroTier 的 .msi（取 zerotier-one_x64.exe）
+          brew install msitools nsis
+          ./fetch-zt-embed.sh 1.16.2
+
+      - name: 版本号
+        id: ver
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "v=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: 构建 macOS 安装包（DMG）
+        env:
+          VERSION: ${{ steps.ver.outputs.v }}
+        run: |
+          ./build-mac-app.sh dist
+          ./build-macos-dmg.sh dist
+
+      - name: 构建 Windows 安装包（setup.exe）
+        env:
+          VERSION: ${{ steps.ver.outputs.v }}
+        run: ./build-windows-setup.sh dist
+
+      - name: 构建 Linux 服务端
+        run: |
+          v='${{ steps.ver.outputs.v }}'
+          GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' \
+            -o "dist/lanbridge-server-$v-linux-amd64" ./server
+          GOOS=linux GOARCH=arm64 go build -ldflags='-s -w' \
+            -o "dist/lanbridge-server-$v-linux-arm64" ./server
+
+      - name: 生成校验和
+        run: |
+          cd dist
+          shasum -a 256 LANBridge-*.dmg LANBridge-*-setup.exe lanbridge-server-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          files=(dist/LANBridge-*.dmg dist/LANBridge-*-setup.exe dist/lanbridge-server-* dist/SHA256SUMS.txt)
+          # 手动重建过 Release 或对同一 tag 重跑时，release 可能已存在：
+          # 此时改为补传资产（--clobber 覆盖同名文件），而不是整体失败。
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes "${files[@]}"
+          fi

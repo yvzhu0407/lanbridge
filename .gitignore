@@ -1,0 +1,22 @@
+# 构建产物
+dist/
+client/client
+client/lanbridge-client
+client/lanbridge-client.exe
+
+# 客户端内嵌的 ZeroTier 运行时（第三方二进制，体积大，用 fetch-zt-embed.sh 生成）
+client/zt-embed/
+client/zt-embed-mac/
+
+# 本地运行数据
+*.log
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp

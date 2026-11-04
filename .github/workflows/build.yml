@@ -1,0 +1,44 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # client/ 只在 macOS 和 Windows 上有实现(darwin/windows 文件带 build tag),
+  # 服务端和共享代码在 Linux 上跑。所以测试分两个 job。
+  test-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - run: go vet ./server
+      - run: go test ./server -race
+
+  test-client-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - name: Prepare embedded ZeroTier
+        run: ./fetch-zt-embed.sh 1.16.2 --mac-only
+      - run: go vet ./client
+      - run: go test ./client -race
+
+  build-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - run: GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o lanbridge-server-linux ./server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanbridge-server-linux
+          path: lanbridge-server-linux

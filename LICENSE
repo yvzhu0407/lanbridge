@@ -1,0 +1,49 @@
+MIT License
+
+Copyright (c) 2026 LANBridge contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## 第三方组件说明
+
+MIT 许可仅覆盖本仓库中的源代码。客户端内嵌的分发文件中包含以下第三方作品，
+其许可与本项目不同，分发时必须同时遵守：
+
+### ZeroTier One
+
+- 位置：`client/zt-embed/zt-node.exe`、`client/zt-embed-mac/zt-node`、
+  `client/zt-embed-mac/MacEthernetTapAgent`
+- 许可：Business Source License 1.1（BSL 1.1），
+  详见 https://github.com/zerotier/ZeroTierOne/blob/dev/LICENSE.txt
+- 说明：本项目以未修改的二进制形式内嵌 ZeroTier 运行时。
+  BSL 1.1 在变更日期（Change Date）前限制将 ZeroTier 作为托管服务提供。
+  若你打算以商业托管服务形式分发本项目，请先确认 ZeroTier 的许可条款。
+
+### TAP-Windows 驱动
+
+- 位置：`client/zt-embed/zttap300.{inf,sys,cat}`
+- 许可：GNU GPL v2（来自 OpenVPN TAP-Windows 项目）
+- 说明：以未修改的二进制形式随客户端分发。
+
+### Go 依赖
+
+- `modernc.org/sqlite`、`github.com/webview/webview_go`、`golang.org/x/sys` 等，
+  均为宽松许可（BSD / MIT / Apache-2.0 等），许可见各模块的 LICENSE 文件。
