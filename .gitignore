@@ -20,3 +20,6 @@ client/zt-embed-mac/
 .idea/
 .vscode/
 *.swp
+
+# spec-workflow MCP 工具的本地模板目录
+.spec-workflow/

@@ -58,6 +58,9 @@ VIAddVersionKey "LegalCopyright" "MIT License"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
+; 组件页:没有它 NSIS 会把所有 Section 按默认值全装上,
+; 「开机自启」就变成强制安装且用户无从取消(与文档描述不符)。
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXENAME}"
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 LANBridge"
@@ -100,12 +103,27 @@ Section "主程序" SecMain
   CreateShortcut "$SMPROGRAMS\LANBridge\桥联 LANBridge.lnk" "$INSTDIR\${EXENAME}" "" "$INSTDIR\${EXENAME}" 0
   CreateShortcut "$SMPROGRAMS\LANBridge\卸载 LANBridge.lnk" "$INSTDIR\uninstall.exe"
   CreateShortcut "$DESKTOP\桥联 LANBridge.lnk" "$INSTDIR\${EXENAME}" "" "$INSTDIR\${EXENAME}" 0
+
+  ; 自启项的取舍必须在「必装」的 Section 里做：用户取消勾选「开机自启」时
+  ; 那个 Section 根本不会执行，没法在里面清掉旧版本留下的 Run 项。
+  ; 这里先无条件删，下面的可选 Section 若被勾选会重新写回。
+  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "LANBridge"
 SectionEnd
 
 Section "开机自启" SecAutostart
-  ; 客户端需要常驻维持虚拟网卡，默认勾选；用户可取消
+  ; 客户端需要常驻维持虚拟网卡，默认勾选；用户可在组件页取消。
+  ; 注意：取消勾选时的清除动作在 SecMain 里做（见上方 DeleteRegValue），
+  ; 因为未选中的 Section 不会执行，不能把清除逻辑写在这里。
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "LANBridge" '"$INSTDIR\${EXENAME}"'
 SectionEnd
+
+; ---------------- 组件页说明 ----------------
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} \
+    "LANBridge 主程序，安装到所选目录。此项必装。"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecAutostart} \
+    "让 LANBridge 随 Windows 启动。客户端需要常驻才能保持虚拟网卡可用；不需要可以不勾选。"
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 ; ---------------- 卸载 ----------------
 Section "Uninstall"

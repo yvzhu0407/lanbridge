@@ -147,6 +147,29 @@
   .status-dot.err { background: var(--err); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
+  /* 虚拟网络健康面板 */
+  .health-row {
+    display: grid;
+    grid-template-columns: 14px 1.1fr 1fr 1fr 1.4fr;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    color: var(--fg-muted);
+    font-size: 11.5px;
+  }
+  .health-head { color: var(--fg-faint); font-size: 10.5px; text-transform: uppercase; }
+  .health-empty { padding: 8px 0; color: var(--fg-subtle); font-size: 12px; }
+  .health-issue {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: var(--err-subtle);
+    border: 1px solid var(--err-subtle);
+    border-left: 2px solid var(--err);
+    border-radius: 6px;
+  }
+  .health-issue-title { color: var(--err); font-weight: 600; font-size: 12px; }
+  .health-steps { margin: 6px 0 0; padding-left: 20px; color: var(--fg-muted); font-size: 11.5px; line-height: 1.6; }
+
   /* 顶部居中 Pill 导航 */
   .nav-pill-container {
     display: inline-flex;
@@ -865,7 +888,7 @@
           </div>
         </div>
         <div class="civ6-notice-right">
-          <span class="status-dot ok"></span> 桥联网络就绪
+          <span class="status-dot wait" id="heroDot"></span> <span id="heroText">正在检测桥联网络…</span>
         </div>
       </div>
 
@@ -992,6 +1015,12 @@
         </div>
       </div>
 
+      <!-- 本机网络异常提示:虚拟网卡没建出来时,房间页也要能看见原因 -->
+      <div class="panel-box hidden" id="roomNetAlert" style="border-left:3px solid var(--err);padding:10px 14px">
+        <div style="color:var(--err);font-weight:600;font-size:12.5px;margin-bottom:6px" id="roomNetAlertTitle">本机虚拟网络未就绪</div>
+        <ol class="health-steps" id="roomNetAlertSteps"></ol>
+      </div>
+
       <!-- 智能快速联机直连指引卡 -->
       <div class="quick-connect-banner">
         <div class="connect-ip-wrap">
@@ -1101,8 +1130,19 @@
 
       <div class="panel-box">
         <div class="panel-header">
+          <div class="panel-title">虚拟网络就绪状态 (NETWORK HEALTH)</div>
+          <button class="btn btn-sm" id="btnRefreshHealth">重新检测</button>
+        </div>
+        <div id="healthPanel" style="padding:10px 12px;font-size:12px">
+          <div class="health-empty">正在检测…</div>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <div class="panel-header">
           <div class="panel-title">客户端运行日志 (client.log)</div>
-          <div style="display:flex;gap:6px">
+          <div style="display:flex;gap:6px;align-items:center">
+            <span id="logPathHint" class="mono" style="font-size:10px;color:var(--fg-faint);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
             <button class="btn btn-sm" id="btnRefreshLogs">刷新日志</button>
             <button class="btn btn-sm" id="btnCopyLogs">复制全部</button>
           </div>
@@ -1183,7 +1223,8 @@ let state = {
   searchQuery: '',
   gameFilter: '',
   showLimit: 30,
-  currentView: 'view-lobby'
+  currentView: 'view-lobby',
+  health: null      // /api/zt/health 最近一次结论
 };
 
 function toast(msg, isErr = false) {
@@ -1278,6 +1319,8 @@ $('btnBackLobby').onclick = () => switchView('view-lobby');
 $('lobbyBackBar').onclick = () => switchView('view-room');
 
 /* ---------- 本机 ZeroTier 状态同步 ---------- */
+// 状态文案直接反映"虚拟网络是否真的就绪":网卡建不出来、没拿到 IP 时
+// 都必须显示成故障,否则用户会以为只是对方的问题。
 async function syncZT() {
   const dot = $('nodeDot');
   const text = $('nodePillText');
@@ -1286,19 +1329,85 @@ async function syncZT() {
     state.nodeId = d.node_id || '';
     dot.className = 'status-dot ok';
     text.textContent = `Node: ${d.node_id.slice(0, 8)}…`;
-    $('mNodeState').textContent = 'READY';
 
-    const net = (d.networks || [])[0];
+    const nets = d.networks || [];
+    const net = nets[0];
     if (net && net.ips && net.ips.length) {
-      state.assignedIp = net.ips[0].replace('/24', '');
+      state.assignedIp = net.ips[0].split('/')[0];
       $('mCurrentIp').textContent = state.assignedIp;
       $('mCurrentIpSub').textContent = `网络: ${net.network_id.slice(0, 10)}…`;
     }
+    const ready = nets.some(n => n.status === 'OK' && n.device && n.ips && n.ips.length);
+    $('mNodeState').textContent = ready ? 'READY' : (nets.length ? 'NOT READY' : 'READY');
   } catch(e) {
     dot.className = 'status-dot err';
     text.textContent = 'ZeroTier 离线';
     $('mNodeState').textContent = 'OFFLINE';
   }
+  await syncHealth();
+}
+
+// 健康巡检结论:顶部徽标 + 控制台的排查建议面板。
+async function syncHealth() {
+  let rep;
+  try {
+    rep = await api('/api/zt/health');
+  } catch(e) {
+    const hd = $('heroDot');
+    if (hd) { hd.className = 'status-dot err'; $('heroText').textContent = '健康检查失败'; }
+    return;
+  }
+  state.health = rep;
+  const hd = $('heroDot');
+  const readyNets = (rep.networks || []).filter(n => n.ready);
+  if (rep.issues && rep.issues.length) {
+    hd.className = 'status-dot err';
+    $('heroText').textContent = rep.issues[0].text;
+  } else if (readyNets.length) {
+    hd.className = 'status-dot ok';
+    $('heroText').textContent = '桥联网络就绪';
+  } else if (!rep.node_ready) {
+    hd.className = 'status-dot err';
+    $('heroText').textContent = 'ZeroTier 实例未运行';
+  } else {
+    hd.className = 'status-dot wait';
+    $('heroText').textContent = '未加入房间网络';
+  }
+  renderHealthPanel(rep);
+}
+
+function renderHealthPanel(rep) {
+  const box = $('healthPanel');
+  if (!box) return;
+  const nets = rep.networks || [];
+  const issues = rep.issues || [];
+  const netRows = nets.map(n => `<div class="health-row">
+      <span class="ping-dot ${n.ready ? 'excellent' : 'timeout'}"></span>
+      <span class="mono">${escapeHtml(n.network_id)}</span>
+      <span>${escapeHtml(n.status || '-')}</span>
+      <span>${n.device ? escapeHtml(n.device) : '<em>无网卡</em>'}</span>
+      <span class="mono">${escapeHtml((n.ips || []).join(' ') || '-')}</span>
+    </div>`).join('');
+  const issueHtml = issues.map(is => `
+      <div class="health-issue">
+        <div class="health-issue-title">⚠ ${escapeHtml(is.text)}</div>
+        <ol class="health-steps">${(is.steps || []).map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+      </div>`).join('');
+  box.innerHTML = `
+    <div class="health-row health-head">
+      <span></span><span>网络</span><span>状态</span><span>网卡</span><span>分配 IP</span>
+    </div>
+    ${netRows || '<div class="health-empty">尚未加入任何房间网络</div>'}
+    <div class="health-row" style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
+      <span class="ping-dot ${rep.planet_ok ? 'excellent' : 'timeout'}"></span>
+      <span>planet 根节点</span>
+      <span>${rep.planet_ok ? '可达' : '不可达'}</span>
+      <span></span>
+      <span class="mono">${rep.planet_ok ? rep.planet_latency + ' ms' : '-'}</span>
+    </div>
+    ${issueHtml}
+    ${issues.length ? '' : '<div class="health-empty" style="color:var(--ok)">✓ 本机虚拟网络与 planet 链路均正常</div>'}
+  `;
 }
 
 $('nodePill').onclick = () => {
@@ -1509,6 +1618,9 @@ const HEARTBEAT_INTERVAL = 60000;
 let roomStatusPolling = false;
 let roomStatusTimer = null;
 let lastHeartbeatAt = 0;
+// 本次会话是否已尝试过"服务端在房间但本地没网络"的自动补 join。
+// 只试一次:失败说明是真故障(驱动/权限),反复重试只会刷屏。
+let rejoinTried = false;
 
 function scheduleRoomPoll(delay) {
   if (roomStatusTimer) clearTimeout(roomStatusTimer);
@@ -1563,13 +1675,23 @@ async function pollRoomStatus() {
       if (me.room_name) state.currentRoom.name = me.room_name;
     } catch(e) {}
 
-    // 本地检查网卡获取虚拟 IP
+    // 本地网络就绪判定:必须同时满足 status=OK、网卡存在、拿到分配 IP。
+    // 只看 status=OK 会把"网卡建不出来"误判成就绪,正是连不上时界面还一片绿的原因。
     try {
-      const zt = await api('/api/zt/status');
-      const net = (zt.networks || []).find(n => n.network_id === d.network_id);
-      if (d.authorized && net && net.status === 'OK' && net.ips && net.ips.length) {
-        state.assignedIp = net.ips[0].split('/')[0];
+      const health = await api('/api/zt/health');
+      state.health = health;
+      const net = (health.networks || []).find(n => n.network_id === d.network_id);
+      if (d.authorized && net && net.ready) {
+        state.assignedIp = (net.ips || [])[0] ? net.ips[0].split('/')[0] : '';
         state.joined = true;
+      } else if (d.authorized && !net && !rejoinTried) {
+        // 服务端说在房间里,本地却没有这个网络——典型是客户端重启后
+        // ZeroTier 本地状态丢失。这里补一次 join,否则会永远卡在"正在下发…"。
+        // 只试一次,失败就交给用户手动重进房间,避免无限重试打爆日志。
+        rejoinTried = true;
+        api('/api/zt/join', { network_id: d.network_id })
+          .then(() => { scheduleRoomPoll(POLL_FAST); })
+          .catch(e => { toast('重新加入网络失败: ' + e.message, true); });
       }
     } catch(e) {}
 
@@ -1638,6 +1760,23 @@ function updateRoomView() {
   $('roomGameGuide').innerHTML = `
     🎮 <strong>文明6 联机指南</strong>: 房主在《文明6》主菜单选择【多人游戏】→【局域网】，点击【创建游戏】；好友在【局域网】点击【直接连接】，输入房主虚拟 IP <code>${escapeHtml(ip)}</code> 即可秒级进入游戏！
   `;
+  updateRoomNetAlert(cr);
+}
+
+// 房间页的本机网络提示。连不上时用户第一眼看的就是这一页,
+// 必须把"是本机网卡没建出来"和"是对方的问题"区分开。
+function updateRoomNetAlert(cr) {
+  const box = $('roomNetAlert');
+  if (!box) return;
+  const health = state.health;
+  const net = health && (health.networks || []).find(n => n.network_id === cr.network_id);
+  if (!health || !net || net.ready) {
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  $('roomNetAlertTitle').textContent = net.reason || '本机虚拟网络未就绪';
+  $('roomNetAlertSteps').innerHTML = (net.steps || []).map(s => `<li>${escapeHtml(s)}</li>`).join('');
 }
 
 /* ---------- 房间成员与往返延迟探测 (核心功能！) ---------- */
@@ -1718,10 +1857,12 @@ async function pingMember(m) {
   const key = m.zt_node_id || m.assigned_ip;
   if (!key) return;
   try {
-    const res = await api(`/api/ping?ip=${encodeURIComponent(m.assigned_ip || '')}&node_id=${encodeURIComponent(m.zt_node_id || '')}`);
-    state.memberLatency[key] = res.latency;
+    const netId = (state.currentRoom && state.currentRoom.network_id) || '';
+    const res = await api(`/api/ping?ip=${encodeURIComponent(m.assigned_ip || '')}&node_id=${encodeURIComponent(m.zt_node_id || '')}&net=${encodeURIComponent(netId)}`);
+    state.memberLatency[key] = res;
   } catch(e) {
-    state.memberLatency[key] = -1;
+    // 探测接口本身失败(客户端异常),按"不可达"处理,不假装正常
+    state.memberLatency[key] = { state: 'no_tunnel', state_text: '探测失败', reachable: false, latency: -1, tunnel: -1 };
   }
   updateMemberRowPing(m);
 }
@@ -1757,10 +1898,8 @@ function renderMembersTable() {
           </div>
         </td>
         <td class="mono" style="color:var(--fg-muted)">${m.zt_node_id || '--'}</td>
-        <td>
-          <span style="display:inline-flex;align-items:center;gap:5px;color:var(--ok);font-size:11.5px;font-weight:500">
-            <span class="ping-dot excellent"></span> 已就绪
-          </span>
+        <td class="state-cell">
+          ${renderStateCell(lat, isMe, m)}
         </td>
         <td class="ping-cell">
           ${renderPingBadge(lat, isMe)}
@@ -1779,22 +1918,73 @@ function renderPingBadge(lat, isMe) {
   if (isMe) {
     return `<span class="latency-indicator" style="color:var(--ok)"><span class="ping-dot excellent"></span> 0 ms <span style="font-size:10px;color:var(--fg-faint);font-weight:normal">(本机)</span></span>`;
   }
-  if (lat === undefined) {
+  // lat 是 /api/ping 的分层结论对象;老接口只有数字,这里一并兼容
+  if (lat === undefined || lat === null) {
     return `<span class="latency-indicator" style="color:var(--fg-faint)"><span class="ping-dot timeout"></span> 探测中…</span>`;
   }
-  if (lat < 0) {
-    return `<span class="latency-indicator" style="color:var(--fg-faint)"><span class="ping-dot timeout"></span> 超时 / 打洞中</span>`;
+  const r = (typeof lat === 'number') ? { reachable: lat >= 0, latency: lat } : lat;
+  if (!r.reachable) {
+    // 关键:隧道能通但数据不通时,绝不能显示成绿色延迟——
+    // 那会让"对方根本收不到消息"看起来一切正常。
+    const tunnel = (r.tunnel !== undefined && r.tunnel >= 0);
+    // 协商中是暂态(刚进房间),用中性色;真故障才用红色。混在一起会让用户误以为机器坏了。
+    const pending = r.state_text === '链路协商中';
+    let tip, label, color;
+    if (tunnel) {
+      tip = `ZeroTier 隧道已打通(${r.tunnel}ms),但虚拟网卡之间数据不通。故障在对方机器上:让对方以管理员重启 LANBridge`;
+      label = '隧道通·数据不通';
+      color = 'var(--fg-faint)';
+    } else if (pending) {
+      tip = '节点已被发现,ZeroTier 正在协商直连路径。刚进房间时正常,等一会儿会自动好';
+      label = '协商中';
+      color = 'var(--warn)';
+    } else {
+      tip = '未能与对方建立 ZeroTier 链路,详情见控制台排查建议';
+      label = '不可达';
+      color = 'var(--fg-faint)';
+    }
+    return `<span class="latency-indicator" style="color:${color}" title="${escapeHtml(tip)}"><span class="ping-dot timeout"></span> ${label}</span>`;
   }
+  const v = r.latency;
   let dotClass = 'excellent';
   let color = 'var(--ok)';
-  if (lat > 80) {
+  if (v > 80) {
     dotClass = 'fair';
     color = 'var(--warn)';
-  } else if (lat > 35) {
+  } else if (v > 35) {
     dotClass = 'good';
     color = 'var(--accent)';
   }
-  return `<span class="latency-indicator" style="color:${color}"><span class="ping-dot ${dotClass}"></span> ${lat} ms</span>`;
+  return `<span class="latency-indicator" style="color:${color}"><span class="ping-dot ${dotClass}"></span> ${v} ms</span>`;
+}
+
+// STATE 列显示的是"到这位成员这一层到底通不通",不是服务端记录的房间成员资格。
+// 旧实现无条件写死"已就绪",导致完全连不上的成员也显示正常。
+function renderStateCell(lat, isMe, m) {
+  if (isMe) {
+    return `<span style="display:inline-flex;align-items:center;gap:5px;color:var(--ok);font-size:11.5px;font-weight:500">
+      <span class="ping-dot excellent"></span> 本机就绪
+    </span>`;
+  }
+  if (lat === undefined || lat === null) {
+    return `<span style="display:inline-flex;align-items:center;gap:5px;color:var(--fg-faint);font-size:11.5px">
+      <span class="ping-dot timeout"></span> 探测中…
+    </span>`;
+  }
+  const r = (typeof lat === 'number') ? { reachable: lat >= 0, state_text: lat >= 0 ? '已就绪' : '不可达' } : lat;
+  if (r.reachable) {
+    const via = r.via === 'tcp' ? 'TCP' : (r.via === 'icmp' ? 'ICMP' : '');
+    return `<span style="display:inline-flex;align-items:center;gap:5px;color:var(--ok);font-size:11.5px;font-weight:500" title="真实探测往返 ${r.latency}ms${via ? ' · 经 ' + via : ''}">
+      <span class="ping-dot excellent"></span> 已就绪
+    </span>`;
+  }
+  // 协商中是暂态(刚进房间),不是故障:用橙色,避免用户以为机器坏了。
+  const pending = r.state_text === '链路协商中';
+  const bad = !pending && (r.state === 'local_down' || r.state === 'no_tunnel');
+  const color = bad ? 'var(--err)' : 'var(--warn)';
+  return `<span style="display:inline-flex;align-items:center;gap:5px;color:${color};font-size:11.5px;font-weight:500">
+    <span class="ping-dot timeout"></span> ${escapeHtml(r.state_text || '不可达')}
+  </span>`;
 }
 
 function updateMemberRowPing(m) {
@@ -1805,6 +1995,8 @@ function updateMemberRowPing(m) {
   const lat = state.memberLatency[key];
   const cell = row.querySelector('.ping-cell');
   if (cell) cell.innerHTML = renderPingBadge(lat, isMe);
+  const stateCell = row.querySelector('.state-cell');
+  if (stateCell) stateCell.innerHTML = renderStateCell(lat, isMe, m);
 }
 
 window.rePingSingle = async (ip, nodeId, btnEl) => {
@@ -1820,15 +2012,22 @@ window.rePingSingle = async (ip, nodeId, btnEl) => {
     if (cell) cell.innerHTML = renderPingBadge(undefined, false);
   }
   try {
-    const res = await api(`/api/ping?ip=${encodeURIComponent(ip)}&node_id=${encodeURIComponent(nodeId)}`);
-    state.memberLatency[key] = res.latency;
-    if (btnEl) toast(`Ping 响应: ${res.latency >= 0 ? res.latency + ' ms' : '超时'}`);
+    const netId = (state.currentRoom && state.currentRoom.network_id) || '';
+    const res = await api(`/api/ping?ip=${encodeURIComponent(ip)}&node_id=${encodeURIComponent(nodeId)}&net=${encodeURIComponent(netId)}`);
+    state.memberLatency[key] = res;
+    if (btnEl) {
+      if (res.reachable) toast(`真实往返 ${res.latency} ms · 经 ${res.via === 'tcp' ? 'TCP 8890' : 'ICMP'}`);
+      else toast(res.state_text + (res.tunnel >= 0 ? `（隧道 ${res.tunnel}ms）` : ''), true);
+    }
   } catch(e) {
-    state.memberLatency[key] = -1;
+    state.memberLatency[key] = { state: 'no_tunnel', state_text: '探测失败', reachable: false, latency: -1, tunnel: -1 };
   }
   if (row) {
     const cell = row.querySelector('.ping-cell');
     if (cell) cell.innerHTML = renderPingBadge(state.memberLatency[key], false);
+    const stateCell = row.querySelector('.state-cell');
+    const member = state.members.find(mm => (mm.zt_node_id || mm.assigned_ip) === key);
+    if (stateCell && member) stateCell.innerHTML = renderStateCell(state.memberLatency[key], false, member);
   }
   if (btnEl) {
     setTimeout(() => {
@@ -1848,7 +2047,13 @@ async function loadLogs(manual = false) {
   }
   try {
     const res = await api('/api/logs');
-    box.textContent = res.logs || '暂无日志记录';
+    // 路径回显:日志写不进用户目录时会退到别的目录,用户得知道去哪儿找
+    const hint = $('logPathHint');
+    if (hint) {
+      hint.textContent = res.path || '';
+      hint.title = res.path ? `日志文件: ${res.path}` : '';
+    }
+    box.textContent = res.logs || (res.error ? `日志不可用: ${res.error}` : `暂无日志记录${res.path ? '（' + res.path + '）' : ''}`);
     box.scrollTop = box.scrollHeight;
     if (manual) toast('运行日志已刷新');
   } catch(e) {
@@ -1865,6 +2070,12 @@ async function loadLogs(manual = false) {
 }
 $('btnRefreshLogs').onclick = () => loadLogs(true);
 $('btnCopyLogs').onclick = () => copyText($('consoleLogs').textContent, '运行日志');
+$('btnRefreshHealth').onclick = async () => {
+  await syncHealth();
+  await loadLogs();
+  const bad = (state.health && state.health.issues || []).length;
+  toast(bad ? `检测到 ${bad} 项网络异常,排查建议已展示` : '虚拟网络状态正常', bad > 0);
+};
 
 /* ---------- 登录 / 注册模态 ---------- */
 const authModal = $('authModal');
@@ -1923,17 +2134,63 @@ const chat = {
   msgKey: '',
   membersAt: 0,
   busy: false,
-  textPending: false
+  textPending: false,
+  // peer 健康度:ip -> {ok, failedAt, lastOkAt}
+  // 房间里有人连不上(驱动没装好/掉线)时,如果不记状态,每 1.5 秒轮询都会
+  // 重新等满超时,表现就是"消息很慢、界面卡住"。
+  health: new Map()
 };
+
+// 单次请求超时。原来是 8 秒,一个死节点就能把整条消息卡住 8 秒。
+const CHAT_REQ_TIMEOUT = 2000;
+// 连续失败后,这段时间内不再主动探测该节点(仍会被动接收它发来的消息)
+const CHAT_PEER_BACKOFF = 30000;
 
 function chatPeers() {
   return state.members.filter(m => !isSelfMember(m) && m.assigned_ip);
+}
+
+// chatPeerUsable: 该节点当前是否值得发请求。失败后进入退避期。
+function chatPeerUsable(ip) {
+  const h = chat.health.get(ip);
+  if (!h || h.failCount === 0) return true;
+  return Date.now() - h.failedAt > CHAT_PEER_BACKOFF;
+}
+
+function chatMarkOk(ip) {
+  const h = chat.health.get(ip) || {};
+  h.ok = true;
+  h.failCount = 0;
+  h.lastOkAt = Date.now();
+  chat.health.set(ip, h);
+}
+
+function chatMarkFail(ip) {
+  const h = chat.health.get(ip) || { failCount: 0 };
+  h.ok = false;
+  h.failCount = (h.failCount || 0) + 1;
+  h.failedAt = Date.now();
+  chat.health.set(ip, h);
 }
 
 function chatBaseUrl(ip) { return `http://${ip}:8890`; }
 
 function chatNetParam() {
   return encodeURIComponent((state.currentRoom && state.currentRoom.network_id) || '');
+}
+
+// fetchJSON: 带超时的请求。超时和网络错误都算失败,不抛给调用方。
+async function chatFetchJson(url, opts = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_REQ_TIMEOUT);
+  try {
+    const r = await fetch(url, { ...opts, signal: controller.signal });
+    return await r.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function chatSyncState() {
@@ -1947,6 +2204,7 @@ async function chatSyncState() {
     chat.msgs = [];
     chat.renderedIds.clear();
     chat.delivery.clear();
+    chat.health.clear();
     chat.msgKey = '';
     $('chatMembers').innerHTML = '';
     $('chatMsgList').innerHTML = '';
@@ -1958,6 +2216,7 @@ async function chatSyncState() {
     chat.msgs = [];
     chat.renderedIds.clear();
     chat.delivery.clear();
+    chat.health.clear();
     chat.membersAt = 0;
   }
   const input = $('chatInput');
@@ -1979,20 +2238,36 @@ async function chatPollRemotes() {
   chat.busy = true;
   try {
     const net = chatNetParam();
-    const targets = [{ ip: state.assignedIp || '127.0.0.1' }, ...chatPeers().map(m => ({ ip: m.assigned_ip }))];
-    const lists = await Promise.all(targets.map(t =>
-      fetch(`${chatBaseUrl(t.ip)}/chat/messages?net=${net}`).then(r => r.json()).catch(() => null)
+    // 增量拉取:只问比本地最新消息更新的内容,避免每次回传整份历史。
+    // 减去 1 秒重叠,防止时钟误差导致漏消息(重复的靠 renderedIds 去重)。
+    let since = 0;
+    if (chat.msgs.length) {
+      since = Math.max(0, (chat.msgs[chat.msgs.length - 1].ts || 0) - 1000);
+    }
+    const selfIp = state.assignedIp || '127.0.0.1';
+    const targets = [selfIp];
+    // 跳过处于退避期的节点:它们大概率还是连不上，问了也是白等超时
+    for (const m of chatPeers()) {
+      if (chatPeerUsable(m.assigned_ip)) targets.push(m.assigned_ip);
+    }
+    const lists = await Promise.all(targets.map(ip =>
+      chatFetchJson(`${chatBaseUrl(ip)}/chat/messages?net=${net}&since=${since}`)
     ));
     let added = false;
-    for (const j of lists) {
-      if (!j || !j.ok) continue;
+    targets.forEach((ip, i) => {
+      const j = lists[i];
+      if (!j || !j.ok) {
+        if (ip !== selfIp) chatMarkFail(ip);
+        return;
+      }
+      if (ip !== selfIp) chatMarkOk(ip);
       for (const m of (j.data && j.data.messages) || []) {
         if (!m || !m.id || chat.renderedIds.has(m.id)) continue;
         chat.renderedIds.add(m.id);
         chat.msgs.push(m);
         added = true;
       }
-    }
+    });
     if (added) {
       chat.msgs.sort((a, b) => (a.ts || 0) - (b.ts || 0));
       chatRenderMsgs();
@@ -2010,9 +2285,14 @@ function chatRenderMembers() {
   }
   box.innerHTML = state.members.map(m => {
     const isMe = isSelfMember(m);
+    // 别人连不上时明确标出来,否则用户只会觉得"消息发出去没反应"
+    const h = isMe ? null : chat.health.get(m.assigned_ip);
+    const offline = h && h.failCount > 0;
+    const dot = isMe ? 'excellent' : (offline ? 'timeout' : 'good');
+    const label = offline ? '<span style="color:var(--fg-faint);font-size:11px"> (不可达)</span>' : '';
     return `<div style="padding:6px 14px;display:flex;align-items:center;gap:8px">
-      <span class="ping-dot ${isMe ? 'excellent' : 'good'}"></span>
-      <span style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.name)}${isMe ? '<span style="color:var(--fg-faint);font-size:11px"> (我)</span>' : ''}</span>
+      <span class="ping-dot ${dot}"></span>
+      <span style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.name)}${isMe ? '<span style="color:var(--fg-faint);font-size:11px"> (我)</span>' : ''}${label}</span>
     </div>`;
   }).join('');
 }
@@ -2058,25 +2338,33 @@ async function chatSendText() {
   chat.msgs.push(msg);
   chatRenderMsgs();
   const post = async ip => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const r = await fetch(`${chatBaseUrl(ip)}/chat/send?net=${net}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: controller.signal
-      });
-      const j = await r.json();
-      return r.ok && j.ok && j.data && j.data.stored === msg.id;
-    } catch { return false; } finally { clearTimeout(timer); }
+    const j = await chatFetchJson(`${chatBaseUrl(ip)}/chat/send?net=${net}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body
+    });
+    const ok = !!(j && j.ok && j.data && j.data.stored === msg.id);
+    if (ok) chatMarkOk(ip); else chatMarkFail(ip);
+    return ok;
   };
   try {
-    const results = await Promise.all(peers.map(peer => post(peer.assigned_ip)));
-    const count = results.filter(Boolean).length;
-    const failed = peers.filter((_, i) => !results[i]).map(peer => peer.name || peer.assigned_ip);
-    const delivery = count === peers.length ? `已送达 ${count}/${peers.length}` : `已确认 ${count}/${peers.length}；未确认：${failed.join('、')}`;
+    // 只发给可达的节点。退避期内的节点直接判定失败，不参与等待，
+    // 否则一个掉线成员会让每条消息都卡满超时。
+    const reachable = peers.filter(peer => chatPeerUsable(peer.assigned_ip));
+    const skipped = peers.filter(peer => !chatPeerUsable(peer.assigned_ip));
+    const results = await Promise.all(reachable.map(peer => post(peer.assigned_ip)));
+    const okCount = results.filter(Boolean).length;
+    const count = okCount;
+    const failed = reachable.filter((_, i) => !results[i]).map(peer => peer.name || peer.assigned_ip)
+      .concat(skipped.map(peer => `${peer.name || peer.assigned_ip}(离线)`));
+    let delivery;
+    if (!failed.length) {
+      delivery = `已送达 ${count}/${peers.length}`;
+    } else {
+      delivery = `已送达 ${count}/${peers.length}，未送达：${failed.join('、')}`;
+    }
     chat.delivery.set(msg.id, delivery);
     if (chat.msgKey === key) {
       chatRenderMsgs();
-      if (count < peers.length) toast(delivery, true);
+      if (failed.length) toast(delivery, true);
     }
     // 本机留一条，刷新后自己也能看到（不计入送达数）
     if (count) post(state.assignedIp || '127.0.0.1');

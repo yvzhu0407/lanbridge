@@ -243,6 +243,9 @@ go test ./...                # 需在 macOS 或 Windows 上跑（client 无 Linu
 Windows / 服务端构建方式和内嵌文件说明见 [docs/EXTENDING.md](docs/EXTENDING.md#6-构建)。
 客户端安装与使用见 [docs/USAGE.md](docs/USAGE.md)。
 各层心跳频率与连接维持机制见 [docs/CONNECTION.md](docs/CONNECTION.md)。
+连通性状态的可观测性需求见 [docs/REQUIREMENTS-CONNECTIVITY.md](docs/REQUIREMENTS-CONNECTIVITY.md)。
+Windows 上的开发方式见 [docs/WINDOWS-DEV.md](docs/WINDOWS-DEV.md)，
+发版前真机验证照 [docs/WINDOWS-SMOKE.md](docs/WINDOWS-SMOKE.md) 走一遍。
 
 ### 发布
 

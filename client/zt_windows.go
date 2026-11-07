@@ -13,16 +13,19 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"unicode/utf16"
+	"unicode/utf8"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// gbkToUTF8 将 Windows 控制台输出的 GBK/CP936 字符串安全转码为 UTF-8,避免日志出现乱码
-func gbkToUTF8(b []byte) string {
+// codePageToUTF8 把指定代码页的字节转成 UTF-8。
+// cp 传 0 表示 CP_ACP(系统 ANSI 码页,中文 Windows 上是 GBK/CP936)。
+func codePageToUTF8(b []byte, cp uintptr) string {
 	if len(b) == 0 {
 		return ""
 	}
@@ -30,7 +33,7 @@ func gbkToUTF8(b []byte) string {
 	multiByteToWideChar := kernel32.NewProc("MultiByteToWideChar")
 
 	r1, _, _ := multiByteToWideChar.Call(
-		0, // CP_ACP
+		cp,
 		0,
 		uintptr(unsafe.Pointer(&b[0])),
 		uintptr(len(b)),
@@ -38,11 +41,13 @@ func gbkToUTF8(b []byte) string {
 		0,
 	)
 	if r1 == 0 {
-		return string(b)
+		// 转换失败(含非法字节序列)。绝不能把原始字节当 string 返回:
+		// Go 按 UTF-8 解释,中文 Windows 的 GBK 字节会变成乱码写进日志。
+		return "[" + strconv.Itoa(len(b)) + " 字节无法解码]"
 	}
 	wchars := make([]uint16, r1)
 	multiByteToWideChar.Call(
-		0, // CP_ACP
+		cp,
 		0,
 		uintptr(unsafe.Pointer(&b[0])),
 		uintptr(len(b)),
@@ -50,6 +55,26 @@ func gbkToUTF8(b []byte) string {
 		r1,
 	)
 	return string(utf16.Decode(wchars))
+}
+
+// gbkToUTF8 保留原名:系统 ANSI 码页 → UTF-8。
+// 中文 Windows 上 netsh / pnputil / taskkill 的输出都是这个编码。
+func gbkToUTF8(b []byte) string { return codePageToUTF8(b, 0) }
+
+// winText 是外部命令输出的通用解码器。
+//   - PowerShell 脚本已强制 UTF-8 输出,合法 UTF-8 原样采用;
+//   - netsh / pnputil / taskkill 输出 ANSI 码页,按 CP_ACP 转换。
+//
+// 先判 UTF-8 再回退,是因为两类命令混在一起用,而中文 GBK 文本极少同时是合法 UTF-8。
+func winText(b []byte) string {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 {
+		return ""
+	}
+	if utf8.Valid(b) {
+		return string(b)
+	}
+	return gbkToUTF8(b)
 }
 
 //go:embed zt-embed/zt-node.exe
@@ -132,7 +157,7 @@ func ensureFirewallRules() {
 		}
 		args := append([]string{"advfirewall", "firewall", "add", "rule"}, r...)
 		if out, err := hideCmd("netsh", args...).CombinedOutput(); err != nil {
-			log.Printf("[防火墙] 规则 %s 添加失败: %v: %s", name, err, out)
+			log.Printf("[防火墙] 规则 %s 添加失败: %v: %s", name, err, winText(out))
 		} else {
 			log.Printf("[防火墙] 规则 %s 已生效", name)
 		}
@@ -148,7 +173,7 @@ func removeLegacyFirewallRules() {
 			continue // 不存在,无需处理
 		}
 		if out, err := hideCmd("netsh", "advfirewall", "firewall", "delete", "rule", "name="+name).CombinedOutput(); err != nil {
-			log.Printf("[防火墙] 清理旧规则 %s 失败: %v: %s", name, err, out)
+			log.Printf("[防火墙] 清理旧规则 %s 失败: %v: %s", name, err, winText(out))
 		} else {
 			log.Printf("[防火墙] 已清理旧版规则 %s", name)
 		}
@@ -160,7 +185,8 @@ func platformDiagnose() {
 	// TAP 驱动是否已装
 	if out, err := hideCmd("pnputil", "/enum-drivers").CombinedOutput(); err == nil {
 		found := false
-		for _, line := range strings.Split(string(out), "\n") {
+		text := winText(out)
+		for _, line := range strings.Split(text, "\n") {
 			if strings.Contains(line, "zttap300") {
 				found = true
 				log.Printf("[诊断] TAP 驱动已安装(%s)", strings.TrimSpace(line))
@@ -175,7 +201,7 @@ func platformDiagnose() {
 	}
 	// 防火墙规则是否生效
 	if out, err := hideCmd("netsh", "advfirewall", "firewall", "show", "rule", "name=LANBridge ZT Subnet In").CombinedOutput(); err == nil {
-		if strings.Contains(string(out), "10.147.0.0/16") {
+		if strings.Contains(winText(out), "10.147.0.0/16") {
 			log.Print("[诊断] 防火墙: 虚拟网段入站规则存在")
 		} else {
 			log.Print("[诊断] 防火墙: 虚拟网段入站规则缺失——你能 ping 出去但对方连不进你,重启本程序以管理员身份运行可重建规则")
@@ -183,7 +209,7 @@ func platformDiagnose() {
 	}
 	// 防火墙总开关(全关则规则无意义)
 	if out, err := hideCmd("netsh", "advfirewall", "show", "allprofiles", "state").CombinedOutput(); err == nil {
-		log.Printf("[诊断] 防火墙配置档状态:\n%s", out)
+		log.Printf("[诊断] 防火墙配置档状态:\n%s", winText(out))
 	}
 }
 
@@ -214,31 +240,57 @@ func checkElevation() bool {
 }
 
 // ensureZTRuntime：解压嵌入式 ZeroTier 文件(幂等)
+//
+// 驱动三件套必须落在 **ZeroTier 家目录**,不是 ProgramData\lanbridge\driver\。
+// 依据 ZeroTier 1.16.2 的 osdep/EthernetTap.cpp:new WindowsEthernetTap(homePath,...)
+// 把 _pathToHelpers 设为 homePath,INF 路径就是 homePath\zttap300.inf(可执行文件里
+// 能直接看到这个拼接常量)。放错目录时 SetupDiGetINFClassA() 读不到 INF,
+// 网卡建不出来,但 join 仍然返回成功——故障非常隐蔽,见 port_error_log.txt。
 func ensureZTRuntime() error {
-	dir := ztRuntimeDir()
-	if err := os.MkdirAll(filepath.Join(dir, "driver"), 0o755); err != nil {
+	binDir := ztRuntimeDir()
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return err
 	}
-	files := []struct {
+	// zt-node.exe 留在运行目录;驱动直接铺到家目录
+	if err := writeIfChanged(filepath.Join(binDir, "zt-node.exe"), ztNodeExe); err != nil {
+		return err
+	}
+	return ensureDriverFiles()
+}
+
+// writeIfChanged:内容一致就不重写,避免每次启动都碰文件
+func writeIfChanged(p string, data []byte) error {
+	current, err := os.ReadFile(p)
+	if err == nil && bytes.Equal(current, data) {
+		return nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("读取 %s: %w", filepath.Base(p), err)
+	}
+	if err := os.WriteFile(p, data, 0o755); err != nil {
+		return fmt.Errorf("解压 %s: %w", filepath.Base(p), err)
+	}
+	return nil
+}
+
+// ensureDriverFiles: 只保证驱动三件套在家目录里,不碰 zt-node 实例。
+// 每次启动都跑(幂等,内容一致就不写),这样从旧版本升级上来时
+// ——实例已在跑、ensureZTRuntime 被跳过——也能把驱动补到位。
+func ensureDriverFiles() error {
+	home := ztHome()
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		return fmt.Errorf("创建 ZeroTier 家目录: %w", err)
+	}
+	for _, f := range []struct {
 		name string
 		data []byte
 	}{
-		{"zt-node.exe", ztNodeExe},
-		{filepath.Join("driver", "zttap300.inf"), ztDriverInf},
-		{filepath.Join("driver", "zttap300.sys"), ztDriverSys},
-		{filepath.Join("driver", "zttap300.cat"), ztDriverCat},
-	}
-	for _, f := range files {
-		p := filepath.Join(dir, f.name)
-		current, err := os.ReadFile(p)
-		if err == nil && bytes.Equal(current, f.data) {
-			continue
-		}
-		if err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("读取 %s: %w", f.name, err)
-		}
-		if err := os.WriteFile(p, f.data, 0o755); err != nil {
-			return fmt.Errorf("解压 %s: %w", f.name, err)
+		{"zttap300.inf", ztDriverInf},
+		{"zttap300.sys", ztDriverSys},
+		{"zttap300.cat", ztDriverCat},
+	} {
+		if err := writeIfChanged(filepath.Join(home, f.name), f.data); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -259,11 +311,10 @@ func installDriver() error {
 	if isDriverInstalled() {
 		return nil
 	}
-	inf := filepath.Join(ztRuntimeDir(), "driver", "zttap300.inf")
+	inf := filepath.Join(ztHome(), "zttap300.inf")
 	out, err := hideCmd("pnputil", "/add-driver", inf, "/install").CombinedOutput()
-	outStr := gbkToUTF8(out)
 	if err != nil {
-		return fmt.Errorf("驱动安装提示: %v: %s", err, strings.TrimSpace(outStr))
+		return fmt.Errorf("驱动安装提示: %v: %s", err, winText(out))
 	}
 	return nil
 }

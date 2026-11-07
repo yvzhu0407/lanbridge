@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -172,10 +173,23 @@ func handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	if !chatAllowed(w, r) {
 		return
 	}
+	q := r.URL.Query()
+	netID := q.Get("net")
+	sinceTS, _ := strconv.ParseInt(q.Get("since"), 10, 64)
+
 	chatMu.Lock()
-	roomMsgs := chatMsgs[r.URL.Query().Get("net")]
-	msgs := make([]chatMsg, len(roomMsgs))
-	copy(msgs, roomMsgs)
+	roomMsgs := chatMsgs[netID]
+	// since>0 时只返回更新的消息:调用方每 1.5 秒轮询一次,
+	// 每次回传全部 500 条是纯浪费,成员多时尤其明显。
+	var msgs []chatMsg
+	for _, m := range roomMsgs {
+		if m.TS > sinceTS {
+			msgs = append(msgs, m)
+		}
+	}
+	if msgs == nil {
+		msgs = []chatMsg{}
+	}
 	chatMu.Unlock()
 	okJSON(w, map[string]any{"messages": msgs})
 }

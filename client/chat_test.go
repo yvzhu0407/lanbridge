@@ -107,3 +107,61 @@ func TestChatRoomIsolationAndAdmission(t *testing.T) {
 		t.Fatalf("preflight: %d", w.Code)
 	}
 }
+
+// 增量拉取：since 之后只返回更新的消息，否则每次轮询都要回传全部历史。
+func TestChatMessagesSince(t *testing.T) {
+	chatNetMu.Lock()
+	oldNets, oldAt := chatNets, chatNetAt
+	chatNets = []chatNetwork{{ID: "r", Status: "OK", Addresses: []string{"10.42.0.2/24"}}}
+	chatNetAt = time.Now().Add(time.Hour)
+	chatNetMu.Unlock()
+	chatMu.Lock()
+	oldMsgs := chatMsgs
+	chatMsgs = map[string][]chatMsg{"r": {
+		{ID: "a", Kind: "text", Text: "旧", TS: 1000},
+		{ID: "b", Kind: "text", Text: "新", TS: 2000},
+	}}
+	chatMu.Unlock()
+	t.Cleanup(func() {
+		chatNetMu.Lock()
+		chatNets, chatNetAt = oldNets, oldAt
+		chatNetMu.Unlock()
+		chatMu.Lock()
+		chatMsgs = oldMsgs
+		chatMu.Unlock()
+	})
+
+	fetch := func(query string) []chatMsg {
+		w := httptest.NewRecorder()
+		handleChatMessages(w, chatTestRequest("GET", "/chat/messages?net=r"+query, "10.42.0.2", "10.42.0.3:1234", ""))
+		if w.Code != 200 {
+			t.Fatalf("query %q: %d %s", query, w.Code, w.Body)
+		}
+		var resp struct {
+			Data struct {
+				Messages []chatMsg `json:"messages"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("query %q: %v", query, err)
+		}
+		return resp.Data.Messages
+	}
+
+	if got := fetch(""); len(got) != 2 {
+		t.Fatalf("无 since 应返回全部, got %d", len(got))
+	}
+	if got := fetch("&since=1000"); len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("since=1000 应只返回 b, got %+v", got)
+	}
+	if got := fetch("&since=2000"); len(got) != 0 {
+		t.Fatalf("since=最新时间戳应返回空, got %d", len(got))
+	}
+	if got := fetch("&since=9999"); len(got) != 0 {
+		t.Fatalf("since 超前应返回空, got %d", len(got))
+	}
+	// 非法 since 当 0 处理，返回全部而不是报错
+	if got := fetch("&since=abc"); len(got) != 2 {
+		t.Fatalf("非法 since 应按 0 处理, got %d", len(got))
+	}
+}

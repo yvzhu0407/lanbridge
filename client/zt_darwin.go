@@ -64,5 +64,9 @@ func ensureZTRuntime() error {
 // installDriver:macOS 无需驱动(用 feth 虚拟网卡)
 func installDriver() error { return nil }
 
+// ensureDriverFiles: macOS 的 TapAgent 由 ensureZTRuntime 解压到运行目录,
+// 再由 ensureZTInstance 复制进实例目录,这里无需额外动作。
+func ensureDriverFiles() error { return nil }
+
 // platformDiagnose: macOS 无驱动安装/防火墙规则环节,无平台特有诊断
 func platformDiagnose() {}
