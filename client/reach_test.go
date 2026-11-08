@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -375,5 +377,60 @@ func TestPeerSnapshotRetriesOnError(t *testing.T) {
 	mu.Unlock()
 	if got != 2 {
 		t.Fatalf("失败不应缓存,两次查询应各调一次, 实际 %d 次", got)
+	}
+}
+
+// captureLog 把 log 输出临时重定向到缓冲区,返回读取最新内容的函数。
+func captureLog(t *testing.T) func() string {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+	return buf.String
+}
+
+// 节点正常(NodeReady=true)恰恰是"网络未就绪 / planet 不可达"最需要记录的时刻。
+// 历史 bug:logHealth 用 logOnceHealth("node", true) 做整体早退,而该函数对健康
+// 输入恒返回 false,导致节点一正常就再也不写任何健康故障。
+func TestLogHealthRecordsIssuesWhenNodeReady(t *testing.T) {
+	resetReachCache()
+	out := captureLog(t)
+
+	logHealth(healthReport{
+		NodeReady: true,
+		Issues: []issue{{
+			Code:  "planet_down",
+			Text:  "无法连接 ZeroTier planet 根节点",
+			Steps: []string{"检查 UDP 出站"},
+		}},
+	})
+
+	got := out()
+	if !strings.Contains(got, "planet 根节点") {
+		t.Fatalf("节点正常时也必须记录 planet 故障, got %q", got)
+	}
+	if !strings.Contains(got, "检查 UDP 出站") {
+		t.Fatalf("故障日志必须带排查步骤, got %q", got)
+	}
+}
+
+// 故障消失后要补一条"已恢复",否则日志里只剩故障、看不出后来好了。
+func TestLogHealthLogsRecovery(t *testing.T) {
+	resetReachCache()
+	out := captureLog(t)
+
+	logHealth(healthReport{
+		NodeReady: true,
+		Issues:    []issue{{Code: "planet_down", Text: "planet 不可达"}},
+	})
+	if !strings.Contains(out(), "planet 不可达") {
+		t.Fatalf("应先记录故障, got %q", out())
+	}
+
+	// 下一轮故障消失
+	logHealth(healthReport{NodeReady: true})
+	if !strings.Contains(out(), "已恢复") {
+		t.Fatalf("故障消失后应写一条已恢复, got %q", out())
 	}
 }

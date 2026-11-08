@@ -548,9 +548,13 @@ func buildHealth() healthReport {
 }
 
 // logHealth 把巡检结论写进日志(同样按状态变化去重)。
+// 注意:不能按 rep.NodeReady 做整体早退——节点正常时恰恰是"网络未就绪/planet
+// 不可达"这类故障最需要记录的时刻。节点本身的状态已作为 node_down 出现在
+// Issues 里,和其余故障走同一套边沿逻辑即可。
 func logHealth(rep healthReport) {
-	if !logOnceHealth("node", rep.NodeReady) {
-		return
+	current := make(map[string]issue, len(rep.Issues))
+	for _, is := range rep.Issues {
+		current[is.Code] = is
 	}
 	for _, is := range rep.Issues {
 		if !logOnceHealth(is.Code, false) {
@@ -560,6 +564,30 @@ func logHealth(rep healthReport) {
 		for i, s := range is.Steps {
 			log.Printf("[排查] %d. %s", i+1, s)
 		}
+	}
+	logHealthRecovered(current)
+}
+
+// logHealthRecovered 对"上一轮还在报、这一轮已消失"的故障补一条恢复记录。
+// 只看 health 命名空间,避免和成员探测的 key 混在一起。
+func logHealthRecovered(current map[string]issue) {
+	var recovered []string
+	reachMu.Lock()
+	now := time.Now()
+	for key, mark := range reachSeen {
+		if !strings.HasPrefix(key, "health:") || mark.state != "bad" {
+			continue
+		}
+		code := strings.TrimPrefix(key, "health:")
+		if _, still := current[code]; still {
+			continue
+		}
+		reachSeen[key] = reachMark{state: "ok", at: now}
+		recovered = append(recovered, code)
+	}
+	reachMu.Unlock()
+	for _, code := range recovered {
+		log.Printf("[健康] 已恢复:%s", code)
 	}
 }
 
@@ -585,14 +613,13 @@ func logOnceHealth(code string, healthy bool) bool {
 }
 
 // startHealthWatch 后台巡检:即使界面没打开,虚拟网络/ping 故障也会落进日志。
+// 不要在这里按 ztRunning() 早退:"ZeroTier 实例未运行"本身就是需要记录的故障,
+// buildHealth 会把它翻译成 node_down 一并写日志。
 func startHealthWatch() {
 	go func() {
 		t := time.NewTicker(90 * time.Second)
 		defer t.Stop()
 		for range t.C {
-			if !ztRunning() {
-				continue
-			}
 			logHealth(buildHealth())
 		}
 	}()

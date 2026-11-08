@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -279,11 +280,18 @@ func ensureZTReady() error {
 		ztStartErr = err.Error()
 		return fmt.Errorf("ZeroTier 实例初始化失败: %w", err)
 	}
-	if !ztRunning() {
+	// 标准单实例:ZeroTier 守护进程独占 TCP 控制端口(-p 同时用于 UDP 与
+	// TCP/HTTP,见 zt-node -h)。端口已监听说明已有实例在跑或正在启动——只能
+	// 等它,绝不能再拉一个:第二个实例会抢同一块 TAP,冒出
+	// "ERROR: unable to remove ip address",让连接反复抖动。只有确实没人监听
+	// 时才拉起新实例。
+	if !ztDaemonListening() {
 		if err := startZTInstance(); err != nil {
 			ztStartErr = err.Error()
 			return fmt.Errorf("启动 ZeroTier 失败: %w", err)
 		}
+	} else {
+		log.Printf("ZeroTier 实例已在启动中,等待其就绪(不再重复拉起)")
 	}
 
 	deadline := time.Now().Add(30 * time.Second)
@@ -369,6 +377,30 @@ func ensureZTInstance() error {
 func ztRunning() bool {
 	_, err := ztRun("info")
 	return err == nil
+}
+
+// ztControlPort 返回本机守护进程的控制端口。ZeroTier 会把实际绑定的端口写进
+// <home>/zerotier-one.port(-p0 随机端口时必须靠它发现);读不到则退回 -p 配置值。
+func ztControlPort() string {
+	if b, err := os.ReadFile(filepath.Join(ztHome(), "zerotier-one.port")); err == nil {
+		if p := strings.TrimSpace(string(b)); p != "" {
+			return p
+		}
+	}
+	return ztPort()
+}
+
+// ztDaemonListening 探测本地控制端口是否已被 ZeroTier 守护进程监听。
+// ZeroTier 靠守护进程独占该端口来保证单实例(第二个同端口实例 bind 失败退出),
+// 所以"端口可连"就等于"已有实例在跑或正在启动"。客户端据此决定等待还是拉起,
+// 不再自己追踪子进程。
+func ztDaemonListening() bool {
+	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", ztControlPort()), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
 }
 
 // startZTInstance:拉起嵌入式 ZeroTier 实例服务

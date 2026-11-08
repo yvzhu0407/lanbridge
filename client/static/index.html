@@ -1636,7 +1636,9 @@ function stopRoomPoll() {
 
 // 业务保活：只更新房间活跃时间，不碰控制器；服务端另有 60s 节流。
 function sendHeartbeat() {
-  if (!state.currentRoom || state.currentView !== 'view-room') return;
+  // 只要仍在房间里就保活,不要求当前停留在房间页:否则用户切到大厅/控制台时
+  // 心跳停发,10 分钟后房间会被服务端 GC 误删。
+  if (!state.currentRoom) return;
   if (Date.now() - lastHeartbeatAt < HEARTBEAT_INTERVAL) return;
   lastHeartbeatAt = Date.now();
   api('/api/room/heartbeat', {}).catch(() => {});

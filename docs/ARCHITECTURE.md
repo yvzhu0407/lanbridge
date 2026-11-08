@@ -67,8 +67,11 @@
 
 这是整套流程里最容易写错的一处。
 
-ZeroTier 的成员授权要求：**控制器上已经出现这个节点 ID**，才能对它做
-`POST /controller/network/{nwid}/member/{nodeid}`。
+ZeroTier 的成员授权通过控制器 API 完成：对
+`PUT /controller/network/{nwid}/member/{nodeid}` 提交 `authorized=true` 与
+`ipAssignments`。**上游控制器在没有该成员记录时会自动创建它**（前提是网络本身存在），
+所以授权并不要求节点"先出现在控制器里"；但节点要真正拿到配置、建出网卡，仍必须
+自己 `join` 并向控制器请求配置——这两件事是分开的。
 
 时间线：
 
@@ -76,22 +79,28 @@ ZeroTier 的成员授权要求：**控制器上已经出现这个节点 ID**，�
 t0  客户端 POST /api/room/join       服务端登记成员、算好 IP
 t1  服务端返回 network_id
 t2  客户端执行 zt join <network_id>  本地开始加入，状态 REQUESTING_CONFIGURATION
-t3  控制器收到成员加入请求，成员以「未授权」形式出现
-t4  客户端轮询 /api/join/status      服务端此刻才能授权
+t3  控制器按请求下发网络配置，节点落实 IP
+t4  客户端轮询 /api/join/status      服务端确认/复核控制器授权状态
 ```
 
-如果在 t1 就尝试授权，控制器会返回 404——成员还不存在。
-
-而且**授权请求返回 200 不代表成员已生效**。控制器的写入和成员列表的
-可读之间有一个短暂窗口，因此 `handleJoinStatus` 里做的是：
+授权请求返回 200 只说明控制器**写入**成功，不代表节点**已收到配置并落卡**。因此
+`handleJoinStatus` 里做的是：
 
 ```
-PUT 授权 → GET 成员列表 → 确认 authorized 字段为 true → 才报告 authorized=true
+PUT 授权 → GET 成员 → 确认 authorized 字段为 true 且 ipAssignments 含预期 IP → 才报告 authorized=true
 ```
 
 客户端也只在 `authorized && status == "OK" && 有 assignedAddresses`
 三者同时成立时才认为「进入房间」。这三道判断任何一道提前放行，
 用户都会看到「已进房但 ping 不通」的假成功。
+
+> 补充（对照 ZeroTier 1.16 上游）：`GET member` 对「成员不存在」和「网络不存在」
+> **都返回 404**，必须先 `GET network` 区分；`NOT_FOUND` 表示网络对象缺失，
+> 与 `REQUESTING_CONFIGURATION`（等待配置）不是同一状态，不能据此断定成员授权丢失。
+> 控制器默认把网络/成员持久化到文件，普通重启应能恢复，不应默认当作"丢成员"。
+> 因此 `handleJoinStatus` 对已授权成员按 30s 节流做**只读复核**，成员缺失则补授权，
+> 网络缺失则报告需重建房间（不盲 PUT），传输/5xx 则保持现状不降级。
+> 详见 [`CONNECTIVITY-INCIDENT.md`](CONNECTIVITY-INCIDENT.md)。
 
 ---
 

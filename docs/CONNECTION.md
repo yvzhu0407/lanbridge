@@ -49,12 +49,13 @@
 | 定时器 | 周期 | 请求 | 服务端动作 |
 |---|---|---|---|
 | `pollRoomStatus`（未授权） | **2 s** | `GET /api/join/status` | 只在前几次调用控制器补授权 |
-| `pollRoomStatus`（已授权） | **30 s** | `GET /api/join/status` | 只读库，不碰控制器 |
+| `pollRoomStatus`（已授权） | **30 s** | `GET /api/join/status` | 只读库 + 每 30s 一次只读复核控制器（见 §5.1） |
 | `loadMembersAndPing` | 4.5 s | `GET /api/room/members` | 只读查询，逐成员 ping |
 | 业务心跳 | **60 s** | `POST /api/room/heartbeat` | 服务端节流后写库 |
 | `syncZT` | 8 s | 本地 `zt-node -j listnetworks` | 本地进程调用，不经过服务器 |
 
-关键：**授权成功后不再访问控制器**，状态轮询降频到 30 秒只用于感知房间销毁/被踢。
+关键：**授权成功后不再高频 PUT**，只在 30 秒节流下做一次只读复核（见 §5.1），
+状态轮询降频到 30 秒同时用于感知房间销毁/被踢。
 
 ### L3：数据面
 
@@ -137,6 +138,13 @@ ALTER TABLE members ADD COLUMN authorized INTEGER DEFAULT 0;
 ```
 
 `leaveCurrent` 把成员删掉后，该行随之消失，重新进房会重新走一次授权。
+
+> 注意：上面「若 authorized=1 就不碰控制器」的前提是**服务端账本与控制器实时状态永久一致**，
+> 而这无法保证。账本一旦与控制器背离（成因不定：成员被删、网络重建等），DB 仍是 1，
+> 客户端就会永远卡在 `REQUESTING_CONFIGURATION` 且无法自愈。已证实的缺陷是**从不复核**，
+> 而非某种特定的"丢失"成因。现已改为「已授权成员按 30s 节流做一次**只读复核**
+> （`CheckMember`，能区分成员缺失 / 网络缺失 / 暂时性故障）」：成员缺失则自动补授权，
+> 网络缺失则只报告不盲补。完整复盘见 [`CONNECTIVITY-INCIDENT.md`](CONNECTIVITY-INCIDENT.md)。
 
 ### 5.2 状态轮询分两档
 

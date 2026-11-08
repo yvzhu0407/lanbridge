@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -91,6 +92,25 @@ type ZTClient struct {
 	Client *http.Client
 }
 
+// ztAPIError 保留控制器返回的 HTTP 状态码,便于把"成员/网络不存在(404,可修复
+// 或需重建)"与"超时/5xx(状态未知,不可据此判定丢失)"分开。纯字符串错误无法
+// 可靠分类,所以单独建类型。
+type ztAPIError struct {
+	Status int
+	Msg    string
+}
+
+func (e *ztAPIError) Error() string { return e.Msg }
+
+// ztStatus 取控制器错误的 HTTP 状态码;非 API 错误(网络层)返回 0。
+func ztStatus(err error) int {
+	var ae *ztAPIError
+	if errors.As(err, &ae) {
+		return ae.Status
+	}
+	return 0
+}
+
 func (z *ZTClient) req(method, path string, body any) (map[string]any, error) {
 	var rd io.Reader
 	if body != nil {
@@ -116,7 +136,7 @@ func (z *ZTClient) req(method, path string, body any) (map[string]any, error) {
 		_ = json.Unmarshal(data, &out)
 	}
 	if resp.StatusCode >= 300 {
-		return out, fmt.Errorf("zt api %s %s: %d %s", method, path, resp.StatusCode, truncate(string(data), 200))
+		return out, &ztAPIError{Status: resp.StatusCode, Msg: fmt.Sprintf("zt api %s %s: %d %s", method, path, resp.StatusCode, truncate(string(data), 200))}
 	}
 	return out, nil
 }
@@ -178,6 +198,42 @@ func (z *ZTClient) DeauthorizeMember(nwid, nodeID string) error {
 	return err
 }
 
+// CheckMember 复核控制器当前对该成员的认定,并把三种情况分开处理:
+//
+//	ok             : 控制器已授权且持有预期 IP
+//	networkMissing : 网络本身在控制器上不存在(成员 GET 和网络 GET 都 404),
+//	                 补授权无用,需要重建房间——调用方不得盲目 PUT。
+//	err            : 传输/5xx 等暂时性故障,状态未知,调用方不得据此判定丢失。
+//
+// 注意:GET member 对"成员不存在"和"网络不存在"都返回 404,所以必须再查一次
+// 网络才能区分(ZeroTier 1.16 EmbeddedNetworkController 的行为)。
+func (z *ZTClient) CheckMember(nwid, nodeID, ip string) (ok bool, networkMissing bool, err error) {
+	member, err := z.req("GET", "/controller/network/"+nwid+"/member/"+nodeID, nil)
+	if err != nil {
+		if ztStatus(err) != http.StatusNotFound {
+			return false, false, err
+		}
+		// 成员或网络任一缺失都 404,查网络把两者分开。
+		if _, nerr := z.req("GET", "/controller/network/"+nwid, nil); nerr != nil {
+			if ztStatus(nerr) == http.StatusNotFound {
+				return false, true, nil // 网络不存在
+			}
+			return false, false, nerr
+		}
+		return false, false, nil // 网络在、成员缺 → 可补授权
+	}
+	authorized, _ := member["authorized"].(bool)
+	assignments, _ := member["ipAssignments"].([]any)
+	if authorized {
+		for _, a := range assignments {
+			if a == ip {
+				return true, false, nil
+			}
+		}
+	}
+	return false, false, nil // 记录在但不合规 → 可补授权
+}
+
 // ---------- IP 分配(每个网络独立 /24,按成员序号分配) ----------
 
 // ipFor 给定网络序号 n 和成员序号 m,生成 10.(147+n).m+1
@@ -197,6 +253,36 @@ type Server struct {
 	db  *sql.DB
 	zt  *ZTClient
 	mu  sync.Mutex // 网络号/成员序号分配串行化
+
+	// 已授权成员向控制器复核的节流。key 绑定成员身份(房间/网络/节点/IP),
+	// 换房或换节点后不会沿用旧的复核时间。DB 的 authorized 只代表"曾经确认过",
+	// 不是控制器实时状态;控制器丢过成员时靠这里复核补授权。
+	verifyMu   sync.Mutex
+	lastVerify map[string]time.Time
+}
+
+// memberVerifyInterval: 已授权成员每隔这么久向控制器做一次只读复核。
+// 与客户端授权后的轮询节奏(30s)对齐,又不会每个心跳都打控制器。
+const memberVerifyInterval = 30 * time.Second
+
+// verifyKey 用成员身份构造复核节流键,避免同一用户在换房/换节点后误命中旧时间。
+func verifyKey(userID int64, roomID int, nwid, nodeID, ip string) string {
+	return fmt.Sprintf("%d|%d|%s|%s|%s", userID, roomID, nwid, nodeID, ip)
+}
+
+// shouldVerify 判断该成员此刻是否该去控制器复核(节流)。返回 true 时已记录时间。
+func (s *Server) shouldVerify(key string) bool {
+	s.verifyMu.Lock()
+	defer s.verifyMu.Unlock()
+	if s.lastVerify == nil {
+		s.lastVerify = make(map[string]time.Time)
+	}
+	now := time.Now()
+	if t, ok := s.lastVerify[key]; ok && now.Sub(t) < memberVerifyInterval {
+		return false
+	}
+	s.lastVerify[key] = now
+	return true
 }
 
 func main() {
@@ -682,8 +768,9 @@ func (s *Server) joinInternal(u *User, roomID int64, nwid string, seq int, w htt
 	return true
 }
 
-// handleJoinStatus: 客户端轮询状态。只有还没授权成功过时才去控制器补授权,
-// 授权成功后不再碰控制器(以前每次轮询都 PUT+GET, 是并发上限的主因)。
+// handleJoinStatus: 客户端轮询状态。未授权时补授权;已授权时按 30s 节流做只读
+// 复核,区分"成员缺失(补授权)"与"网络缺失(需重建)",避免控制器与 DB 不一致
+// 时客户端永远卡在 REQUESTING_CONFIGURATION。
 func (s *Server) handleJoinStatus(w http.ResponseWriter, r *http.Request, u *User) {
 	var roomID, seq int
 	var nwid, ip string
@@ -697,15 +784,34 @@ func (s *Server) handleJoinStatus(w http.ResponseWriter, r *http.Request, u *Use
 		return
 	}
 	if authorized == 0 {
-		// 控制器确认授权及分配的 IP 后才算成功；失败时留待下次轮询重试。
+		// 从未授权成功:每次轮询都补授权(客户端此时是快轮询),成功后落库。
 		if err := s.zt.AuthorizeMember(nwid, ztNodeID, ip); err != nil {
 			log.Printf("authorize room %s node %s: %v", nwid, ztNodeID, err)
+		} else if _, err := s.db.Exec(`UPDATE members SET authorized=1 WHERE user_id=? AND room_id=?`, u.ID, roomID); err != nil {
+			log.Printf("标记授权状态失败 room=%d user=%d: %v", roomID, u.ID, err)
 		} else {
-			if _, err := s.db.Exec(`UPDATE members SET authorized=1 WHERE user_id=? AND room_id=?`, u.ID, roomID); err != nil {
-				log.Printf("标记授权状态失败 room=%d user=%d: %v", roomID, u.ID, err)
-			} else {
-				authorized = 1
-				s.touchRoom(int64(roomID))
+			authorized = 1
+			s.touchRoom(int64(roomID))
+		}
+	} else if s.shouldVerify(verifyKey(u.ID, roomID, nwid, ztNodeID, ip)) {
+		// 已授权也要定期向控制器复核,但要把"成员缺失(可补)"与"网络缺失(需重建)"
+		// 分开,且绝不把传输/5xx 故障当成成员丢失。
+		ok, netMissing, verr := s.zt.CheckMember(nwid, ztNodeID, ip)
+		switch {
+		case verr != nil:
+			// 控制器暂时不可达/5xx:状态未知,保持现状,下个周期再验,不误降级。
+			log.Printf("verify member room %s node %s: %v", nwid, ztNodeID, verr)
+		case netMissing:
+			// 网络本身在控制器上不存在:补授权无用,需要重建房间,不做盲 PUT。
+			log.Printf("控制器上网络 %s 不存在,房间 %d 需重建(不自动补授权)", nwid, roomID)
+		case !ok:
+			log.Printf("控制器未授权成员 room %s node %s,重新补授权", nwid, ztNodeID)
+			if err := s.zt.AuthorizeMember(nwid, ztNodeID, ip); err != nil {
+				log.Printf("re-authorize room %s node %s: %v", nwid, ztNodeID, err)
+				// 补授权失败:降级为未授权,让后续轮询持续重试而不是假装已连上。
+				if _, err := s.db.Exec(`UPDATE members SET authorized=0 WHERE user_id=? AND room_id=?`, u.ID, roomID); err == nil {
+					authorized = 0
+				}
 			}
 		}
 	}
