@@ -12,7 +12,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -200,8 +199,8 @@ func startChatServer() {
 	mux.HandleFunc("/chat/who", handleChatWho)
 	mux.HandleFunc("/chat/send", handleChatSend)
 	mux.HandleFunc("/chat/messages", handleChatMessages)
-	log.Printf("房间聊天服务监听 %s（仅桥联网络内可达）", chatPort)
+	LogDev("房间聊天服务监听 %s（仅桥联网络内可达）", chatPort)
 	if err := http.ListenAndServe(chatPort, mux); err != nil {
-		log.Printf("聊天服务启动失败（端口被占用？）: %v", err)
+		LogDev("聊天服务启动失败（端口被占用？）: %v", err)
 	}
 }

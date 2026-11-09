@@ -17,7 +17,6 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -60,7 +59,7 @@ func loadTuneState() (tuneState, bool) {
 func saveTuneState(s tuneState) {
 	b, _ := json.Marshal(s)
 	if err := os.WriteFile(tuneStatePath(), b, 0o600); err != nil {
-		log.Printf("[网络调优] 保存状态失败: %v", err)
+		LogDev("[网络调优] 保存状态失败: %v", err)
 	}
 }
 
@@ -82,15 +81,15 @@ func tuneNetwork(device string) {
 	}
 	prev, err := newNetTune().LowerMetric(device)
 	if err != nil {
-		log.Printf("[网络调优] 降低网卡跃点失败(%s): %v", device, err)
+		LogDev("[网络调优] 降低网卡跃点失败(%s): %v", device, err)
 		return
 	}
 	if prev < 0 {
-		log.Printf("[网络调优] %s 无需调整（平台无跃点概念）", device)
+		LogDev("[网络调优] %s 无需调整（平台无跃点概念）", device)
 		return
 	}
 	saveTuneState(tuneState{Device: device, PrevMetric: prev, At: time.Now().Unix()})
-	log.Printf("[网络调优] 已把网卡 %s 的跃点从 %d 降到 1", device, prev)
+	LogDev("[网络调优] 已把网卡 %s 的跃点从 %d 降到 1", device, prev)
 }
 
 // restoreNetwork 离开房间时调用。
@@ -108,7 +107,7 @@ func restoreStaleTune() {
 	tuneMu.Lock()
 	defer tuneMu.Unlock()
 	if s, ok := loadTuneState(); ok {
-		log.Printf("[网络调优] 发现上次退出未恢复的网卡调整，先恢复")
+		LogDev("[网络调优] 发现上次退出未恢复的网卡调整，先恢复")
 		restoreTuneLocked(s)
 	}
 }
@@ -116,9 +115,9 @@ func restoreStaleTune() {
 func restoreTuneLocked(s tuneState) {
 	if err := newNetTune().RestoreMetric(s.Device, s.PrevMetric); err != nil {
 		// 保留状态文件，下次启动再试
-		log.Printf("[网络调优] 恢复网卡跃点失败(%s): %v", s.Device, err)
+		LogDev("[网络调优] 恢复网卡跃点失败(%s): %v", s.Device, err)
 		return
 	}
 	clearTuneState()
-	log.Printf("[网络调优] 已恢复网卡 %s 的跃点(%d)", s.Device, s.PrevMetric)
+	LogDev("[网络调优] 已恢复网卡 %s 的跃点(%d)", s.Device, s.PrevMetric)
 }

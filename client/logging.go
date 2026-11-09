@@ -15,7 +15,28 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
+
+func init() {
+	log.SetPrefix("d|")
+}
+
+// LogDev writes a developer-facing log line with d| prefix.
+func LogDev(format string, a ...any) {
+	log.Printf(format, a...)
+}
+
+// LogUser writes a user-facing event line with u| prefix:
+// u|2026-11-09T10:20:31|warn|net_not_ready|你这台机器的虚拟网卡还没建出来
+func LogUser(level, code, text string) {
+	now := time.Now().Format("2006-01-02T15:04:05")
+	line := fmt.Sprintf("u|%s|%s|%s|%s\n", now, level, code, text)
+	w := log.Writer()
+	if w != nil {
+		_, _ = w.Write([]byte(line))
+	}
+}
 
 // logMaxSize:单个日志文件上限。长期常驻运行不至于把磁盘写满。
 const logMaxSize = 4 << 20 // 4MB
@@ -76,10 +97,12 @@ func setupLogging() string {
 		}
 		logFilePath = path
 		log.SetOutput(&logFanout{file: f, console: os.Stderr})
+		log.SetPrefix("d|")
 		return path
 	}
 	// 所有目录都写不了:只能退回控制台(GUI 下等于没有日志,但不影响程序运行)
 	log.SetOutput(&logFanout{console: os.Stderr})
+	log.SetPrefix("d|")
 	return ""
 }
 

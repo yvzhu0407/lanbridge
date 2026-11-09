@@ -152,14 +152,14 @@ func ensureFirewallRules() {
 	for _, r := range firewallRules {
 		name := r[0][len("name="):]
 		if _, err := hideCmd("netsh", "advfirewall", "firewall", "show", "rule", "name="+name).CombinedOutput(); err == nil {
-			log.Printf("[防火墙] 已存在同名规则 %s，保留原规则，请检查其配置", name)
+			LogDev("[防火墙] 已存在同名规则 %s，保留原规则，请检查其配置", name)
 			continue
 		}
 		args := append([]string{"advfirewall", "firewall", "add", "rule"}, r...)
 		if out, err := hideCmd("netsh", args...).CombinedOutput(); err != nil {
-			log.Printf("[防火墙] 规则 %s 添加失败: %v: %s", name, err, winText(out))
+			LogDev("[防火墙] 规则 %s 添加失败: %v: %s", name, err, winText(out))
 		} else {
-			log.Printf("[防火墙] 规则 %s 已生效", name)
+			LogDev("[防火墙] 规则 %s 已生效", name)
 		}
 	}
 	removeLegacyFirewallRules()
@@ -173,9 +173,9 @@ func removeLegacyFirewallRules() {
 			continue // 不存在,无需处理
 		}
 		if out, err := hideCmd("netsh", "advfirewall", "firewall", "delete", "rule", "name="+name).CombinedOutput(); err != nil {
-			log.Printf("[防火墙] 清理旧规则 %s 失败: %v: %s", name, err, winText(out))
+			LogDev("[防火墙] 清理旧规则 %s 失败: %v: %s", name, err, winText(out))
 		} else {
-			log.Printf("[防火墙] 已清理旧版规则 %s", name)
+			LogDev("[防火墙] 已清理旧版规则 %s", name)
 		}
 	}
 }
@@ -189,27 +189,27 @@ func platformDiagnose() {
 		for _, line := range strings.Split(text, "\n") {
 			if strings.Contains(line, "zttap300") {
 				found = true
-				log.Printf("[诊断] TAP 驱动已安装(%s)", strings.TrimSpace(line))
+				LogDev("[诊断] TAP 驱动已安装(%s)", strings.TrimSpace(line))
 				break
 			}
 		}
 		if !found {
-			log.Print("[诊断] TAP 驱动未找到(pnputil 枚举里没有 zttap300):网卡将无法创建,重启本程序触发重装")
+			LogDev("[诊断] TAP 驱动未找到(pnputil 枚举里没有 zttap300):网卡将无法创建,重启本程序触发重装")
 		}
 	} else {
-		log.Printf("[诊断] 无法枚举驱动(pnputil 失败,可能非管理员): %v", err)
+		LogDev("[诊断] 无法枚举驱动(pnputil 失败,可能非管理员): %v", err)
 	}
 	// 防火墙规则是否生效
 	if out, err := hideCmd("netsh", "advfirewall", "firewall", "show", "rule", "name=LANBridge ZT Subnet In").CombinedOutput(); err == nil {
 		if strings.Contains(winText(out), "10.147.0.0/16") {
-			log.Print("[诊断] 防火墙: 虚拟网段入站规则存在")
+			LogDev("[诊断] 防火墙: 虚拟网段入站规则存在")
 		} else {
-			log.Print("[诊断] 防火墙: 虚拟网段入站规则缺失——你能 ping 出去但对方连不进你,重启本程序以管理员身份运行可重建规则")
+			LogDev("[诊断] 防火墙: 虚拟网段入站规则缺失——你能 ping 出去但对方连不进你,重启本程序以管理员身份运行可重建规则")
 		}
 	}
 	// 防火墙总开关(全关则规则无意义)
 	if out, err := hideCmd("netsh", "advfirewall", "show", "allprofiles", "state").CombinedOutput(); err == nil {
-		log.Printf("[诊断] 防火墙配置档状态:\n%s", winText(out))
+		LogDev("[诊断] 防火墙配置档状态:\n%s", winText(out))
 	}
 }
 
@@ -218,24 +218,24 @@ func platformDiagnose() {
 func checkElevation() bool {
 	// 已经是管理员,不用提权
 	if isAdmin() {
-		log.Println("[权限] 已以管理员身份运行")
+		LogDev("[权限] 已以管理员身份运行")
 		ensureFirewallRules()
 		return false
 	}
 	// 如果带了 --elevated 标记说明提权失败或被取消,不再循环
 	for _, arg := range os.Args[1:] {
 		if strings.TrimLeft(arg, "-") == "elevated" {
-			log.Println("[权限] 提权已尝试但未成功,继续以普通权限运行")
+			LogDev("[权限] 提权已尝试但未成功,继续以普通权限运行")
 			return false
 		}
 	}
 	// 尝试提权
-	log.Println("[权限] 需要管理员权限安装虚拟网卡驱动,正在请求提权…")
+	LogDev("[权限] 需要管理员权限安装虚拟网卡驱动,正在请求提权…")
 	if selfElevate() {
 		// 提权成功,新进程已启动,当前进程退出
 		return true
 	}
-	log.Println("[权限] 用户取消了提权,继续以普通权限运行(虚拟网卡可能无法创建)")
+	LogDev("[权限] 用户取消了提权,继续以普通权限运行(虚拟网卡可能无法创建)")
 	return false
 }
 

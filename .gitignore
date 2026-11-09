@@ -23,3 +23,6 @@ client/zt-embed-mac/
 
 # spec-workflow MCP 工具的本地模板目录
 .spec-workflow/
+
+# 前端依赖
+client/ui/node_modules/

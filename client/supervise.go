@@ -15,7 +15,6 @@ package main
 //   - planet 不可达时【不在本机乱动】——那是上游问题,重启本机无用还添乱。
 
 import (
-	"log"
 	"sync"
 	"time"
 )
@@ -157,14 +156,14 @@ func startSupervisor() {
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						log.Printf("[自愈] 巡检异常(已忽略): %v", r)
+						LogDev("[自愈] 巡检异常(已忽略): %v", r)
 					}
 				}()
 				superviseOnce()
 			}()
 		}
 	}()
-	log.Printf("[自愈] 后台链路守护已启动(周期 %s)", superviseInterval)
+	LogDev("[自愈] 后台链路守护已启动(周期 %s)", superviseInterval)
 }
 
 // planRecovery 是纯决策函数:根据观测结果决定下一步动作。抽出来便于单测。
@@ -264,17 +263,17 @@ func superviseOnce() {
 		if !supThrottle(lightThrottle) {
 			return
 		}
-		log.Printf("[自愈] %s", note)
+		LogDev("[自愈] %s", note)
 		if err := supEnsureReady(); err != nil {
-			log.Printf("[自愈] 拉起实例失败: %v", err)
+			LogDev("[自愈] 拉起实例失败: %v", err)
 		}
 	case actJoin:
 		if !supThrottle(lightThrottle) {
 			return
 		}
-		log.Printf("[自愈] %s", note)
+		LogDev("[自愈] %s", note)
 		if _, err := supRun("join", net); err != nil {
-			log.Printf("[自愈] 重新加入失败: %v", err)
+			LogDev("[自愈] 重新加入失败: %v", err)
 		}
 	case actRestartDaemon:
 		if !supRestartThrottle(restartDaemonThrottle) {
@@ -284,14 +283,15 @@ func superviseOnce() {
 			}
 			return
 		}
-		log.Printf("[自愈] %s", note)
+		LogDev("[自愈] %s", note)
 		if err := supRestartDaemon(); err != nil {
-			log.Printf("[自愈] 重启实例失败: %v", err)
+			LogDev("[自愈] 重启实例失败: %v", err)
 			return
 		}
+		LogUser("warn", "self_heal", "检测到网络卡住，已自动重启修复")
 		// 重启后实例是干净的,补一次 join 让它重新登记该网络。
 		if _, err := supRun("join", net); err != nil {
-			log.Printf("[自愈] 重启后重新加入失败: %v", err)
+			LogDev("[自愈] 重启后重新加入失败: %v", err)
 		}
 		// 重启+join 后重新给宽限期,别在同一故障点上连环动作。
 		supMu.Lock()
@@ -301,11 +301,11 @@ func superviseOnce() {
 		if !supThrottle(rejoinThrottle) {
 			return
 		}
-		log.Printf("[自愈] %s", note)
+		LogDev("[自愈] %s", note)
 		_, _ = supRun("leave", net)
 		time.Sleep(time.Second)
 		if _, err := supRun("join", net); err != nil {
-			log.Printf("[自愈] 重进失败: %v", err)
+			LogDev("[自愈] 重进失败: %v", err)
 		}
 		// 重进后重新给一个宽限期,别在同一故障点上连环动作。
 		supMu.Lock()

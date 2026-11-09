@@ -53,7 +53,7 @@ func applyClientConfig() {
 	}
 	var c clientConfig
 	if json.Unmarshal(b, &c) != nil {
-		log.Printf("config.json 解析失败,忽略并使用默认配置")
+		LogDev("config.json 解析失败,忽略并使用默认配置")
 		return
 	}
 	if c.Server != "" && os.Getenv("LANBRIDGE_SERVER") == "" {
@@ -74,18 +74,18 @@ func main() {
 	applyClientConfig()
 	// 文件日志:Windows GUI 模式无控制台,出错只能看这里(实现见 logging.go)
 	if p := setupLogging(); p != "" {
-		log.Printf("日志文件: %s", p)
+		LogDev("日志文件: %s", p)
 	} else {
-		log.Printf("警告: 日志无法写入磁盘,仅输出到控制台 — %s", loggingHint())
+		LogDev("警告: 日志无法写入磁盘,仅输出到控制台 — %s", loggingHint())
 	}
-	log.Printf("=== lanbridge 客户端启动 (pid %d) ===", os.Getpid())
+	LogDev("=== lanbridge 客户端启动 (pid %d) ===", os.Getpid())
 	// Windows: 检查管理员权限,需要时弹 UAC 提权(macOS 此函数为空)
 	if checkElevation() {
 		// 提权成功,新的管理员进程已启动,当前进程退出
 		os.Exit(0)
 	}
 	if err := ensureZTReady(); err != nil {
-		log.Printf("ZeroTier 启动未就绪: %v", err)
+		LogDev("ZeroTier 启动未就绪: %v", err)
 	}
 
 	mux := http.NewServeMux()
@@ -125,14 +125,14 @@ func main() {
 	mux.HandleFunc("GET /api/logs", handleLogs)
 	mux.HandleFunc("POST /api/zt/join", handleZTJoin)
 
-	log.Printf("lanbridge 客户端 http://%s (server=%s)", listenAddr, serverBase)
+	LogDev("lanbridge 客户端 http://%s (server=%s)", listenAddr, serverBase)
 	url := "http://" + listenAddr
 
 	// 单实例:8899 被占说明已有一个客户端在跑,直接拉起已有实例的窗口后退出
 	// (裸二进制双击两次 / .app 双击两次都会触发;避免两个进程抢端口互相打架)
 	if resp, err := http.Get(url + "/api/config"); err == nil {
 		resp.Body.Close()
-		log.Print("已有 lanbridge 客户端在运行,本次启动转为唤起既有实例")
+		LogDev("已有 lanbridge 客户端在运行,本次启动转为唤起既有实例")
 		if err := runWindow(url); err != nil {
 			openBrowser(url)
 		}
@@ -156,13 +156,13 @@ func main() {
 	// (WebView 初始化必须在主线程;失败则退回开浏览器)
 	go func() {
 		if err := http.ListenAndServe(listenAddr, mux); err != nil {
-			log.Printf("HTTP 服务退出: %v", err)
+			LogDev("HTTP 服务退出: %v", err)
 			os.Exit(1)
 		}
 	}()
 	time.Sleep(300 * time.Millisecond)
 	if err := runWindow(url); err != nil {
-		log.Printf("原生窗口不可用(%v),退回浏览器", err)
+		LogDev("原生窗口不可用(%v),退回浏览器", err)
 		openBrowser(url)
 		select {} // 保持进程
 	}
@@ -293,14 +293,14 @@ func ensureZTReady() error {
 			return fmt.Errorf("启动 ZeroTier 失败: %w", err)
 		}
 	} else {
-		log.Printf("ZeroTier 实例已在启动中,等待其就绪(不再重复拉起)")
+		LogDev("ZeroTier 实例已在启动中,等待其就绪(不再重复拉起)")
 	}
 
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if ztRunning() {
 			ztStartErr = ""
-			log.Printf("ZeroTier 实例已就绪")
+			LogDev("ZeroTier 实例已就绪")
 			return nil
 		}
 		time.Sleep(time.Second)
@@ -342,6 +342,7 @@ func ensureZTInstance() error {
 		// 从服务端拉 planet
 		resp, err := (&http.Client{Timeout: 15 * time.Second}).Get(serverBase + "/api/planet")
 		if err != nil {
+			LogUser("error", "server_down", "连不上房间服务器")
 			return fmt.Errorf("下载 planet 失败: %w", err)
 		}
 		defer resp.Body.Close()
@@ -541,8 +542,9 @@ func handleZTPeers(w http.ResponseWriter, r *http.Request) {
 	okJSON(w, raw)
 }
 
-// handleLogs: 获取客户端最近运行日志(尾部 120 行)
-// 同时回传实际路径,方便用户直接去文件管理器里找(写不进用户目录时会退到别处)。
+// handleLogs: 获取客户端最近运行日志(尾部 200 行)
+// 支持 view 参数: "" (全部) | "user" (用户日志, 剥去 u| 前缀) | "dev" (开发者日志, 剥去 d| 前缀)
+// 先按前缀过滤, 再取最后 200 行, 避免开发日志挤占用户面板。
 func handleLogs(w http.ResponseWriter, r *http.Request) {
 	if logFilePath == "" {
 		okJSON(w, map[string]any{"logs": "", "path": "", "error": loggingHint()})
@@ -553,7 +555,25 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 		okJSON(w, map[string]any{"logs": "", "path": logFilePath, "error": err.Error()})
 		return
 	}
-	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	rawLines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	view := r.URL.Query().Get("view")
+	var lines []string
+	switch view {
+	case "user":
+		for _, l := range rawLines {
+			if strings.HasPrefix(l, "u|") {
+				lines = append(lines, strings.TrimPrefix(l, "u|"))
+			}
+		}
+	case "dev":
+		for _, l := range rawLines {
+			if strings.HasPrefix(l, "d|") {
+				lines = append(lines, strings.TrimPrefix(l, "d|"))
+			}
+		}
+	default:
+		lines = rawLines
+	}
 	if len(lines) > 200 {
 		lines = lines[len(lines)-200:]
 	}
@@ -675,7 +695,7 @@ func handleZTJoin(w http.ResponseWriter, r *http.Request) {
 		if pe := ztPortErrorHint(); pe != "" {
 			msg += " — " + pe
 		}
-		log.Printf("[join] %s", msg)
+		LogDev("[join] %s", msg)
 		errJSON(w, 500, msg)
 		return
 	}
@@ -686,7 +706,7 @@ func handleZTJoin(w http.ResponseWriter, r *http.Request) {
 		if dev := waitNetworkDevice(req.NetworkID, 90*time.Second); dev != "" {
 			tuneNetwork(dev)
 		} else {
-			log.Printf("[网络调优] 等待网卡超时(90s),跳过跃点调整;网络仍可用,只是游戏可能不走隧道")
+			LogDev("[网络调优] 等待网卡超时(90s),跳过跃点调整;网络仍可用,只是游戏可能不走隧道")
 		}
 		diagnoseZTCommon("加入网络 " + req.NetworkID)
 	}()
@@ -793,10 +813,10 @@ func waitNetworkDevice(networkID string, timeout time.Duration) string {
 
 // diagnoseZTCommon:平台无关的网络健康诊断(join 后排障用,写 client.log)
 func diagnoseZTCommon(reason string) {
-	log.Printf("[诊断] ==== %s ====", reason)
+	LogDev("[诊断] ==== %s ====", reason)
 	out, err := ztRun("-j", "listnetworks")
 	if err != nil {
-		log.Printf("[诊断] ZeroTier 实例无响应: %v(日志见 %s)", err, ztNodeLogPath())
+		LogDev("[诊断] ZeroTier 实例无响应: %v(日志见 %s)", err, ztNodeLogPath())
 		return
 	}
 	var nets []map[string]any
@@ -804,22 +824,22 @@ func diagnoseZTCommon(reason string) {
 		return
 	}
 	if len(nets) == 0 {
-		log.Print("[诊断] 未加入任何桥联网络")
+		LogDev("[诊断] 未加入任何桥联网络")
 	}
 	for _, n := range nets {
 		dev, _ := n["portDeviceName"].(string)
 		st, _ := n["status"].(string)
-		log.Printf("[诊断] 网络 %v 状态=%v 网卡=%v IP=%v 路由=%v",
+		LogDev("[诊断] 网络 %v 状态=%v 网卡=%v IP=%v 路由=%v",
 			n["id"], st, dev, n["assignedAddresses"], n["routes"])
 		switch st {
 		case "PORT_ERROR":
-			log.Print("[诊断] 网卡创建失败(PORT_ERROR):TAP 驱动未装好或被安全软件拦截,重装驱动或给本程序加白名单")
+			LogDev("[诊断] 网卡创建失败(PORT_ERROR):TAP 驱动未装好或被安全软件拦截,重装驱动或给本程序加白名单")
 		case "REQUESTING_CONFIGURATION":
-			log.Print("[诊断] 正在等待服务端下发配置:服务端不可达(检查 UDP 9995 出站)或 planet 不匹配")
+			LogDev("[诊断] 正在等待服务端下发配置:服务端不可达(检查 UDP 9995 出站)或 planet 不匹配")
 		case "ACCESS_DENIED":
-			log.Print("[诊断] 服务端拒绝授权:房间已解散或成员被移除")
+			LogDev("[诊断] 服务端拒绝授权:房间已解散或成员被移除")
 		case "OK":
-			log.Print("[诊断] 网络配置正常(OK);若仍 ping 不通,看对方侧日志与防火墙")
+			LogDev("[诊断] 网络配置正常(OK);若仍 ping 不通,看对方侧日志与防火墙")
 		}
 	}
 	// peers:判断与 planet 根/对方节点的链路
@@ -833,28 +853,28 @@ func diagnoseZTCommon(reason string) {
 				paths, _ := p["paths"].([]any)
 				switch role {
 				case "PLANET":
-					log.Printf("[诊断] planet 根 %v 延迟=%vms 路径数=%d(延迟<0 说明服务端不可达)", p["address"], lat, len(paths))
+					LogDev("[诊断] planet 根 %v 延迟=%vms 路径数=%d(延迟<0 说明服务端不可达)", p["address"], lat, len(paths))
 				case "LEAF":
 					leafs++
 					if lat < 0 {
 						pending++
-						log.Printf("[诊断] 房间节点 %v 已发现但未握手(路径数=%d):链路还在建立,通常再等几秒即可", p["address"], len(paths))
+						LogDev("[诊断] 房间节点 %v 已发现但未握手(路径数=%d):链路还在建立,通常再等几秒即可", p["address"], len(paths))
 						continue
 					}
-					log.Printf("[诊断] 房间节点 %v 延迟=%vms 链路已通", p["address"], lat)
+					LogDev("[诊断] 房间节点 %v 延迟=%vms 链路已通", p["address"], lat)
 				}
 			}
 			if leafs == 0 {
-				log.Print("[诊断] 尚未发现房间其他节点:对方可能没加入,或双方都在线但还没互发流量(ping 一次即可触发)")
+				LogDev("[诊断] 尚未发现房间其他节点:对方可能没加入,或双方都在线但还没互发流量(ping 一次即可触发)")
 			} else if pending > 0 {
 				// "在列表但没握手"和"不在列表"是两种完全不同的故障，
 				// 排查方向也不同，不能混为一谈。
-				log.Printf("[诊断] %d 个节点尚未握手:Zerotier 正在协商路径,若持续数分钟仍如此,对方 UDP 出站可能被拦", pending)
+				LogDev("[诊断] %d 个节点尚未握手:Zerotier 正在协商路径,若持续数分钟仍如此,对方 UDP 出站可能被拦", pending)
 			}
 		}
 	}
 	platformDiagnose()
-	log.Print("[诊断] ==== 诊断结束 ====")
+	LogDev("[诊断] ==== 诊断结束 ====")
 }
 
 // ---------- 浏览器 ----------

@@ -17,7 +17,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"os/exec"
 	"path/filepath"
@@ -494,25 +493,29 @@ func logProbe(desc string, res probeResult) {
 		return
 	}
 	if recovered {
-		log.Printf("[连通] %s 已恢复:数据面可达 %s(经 %s)", desc, fmtLat(res.Latency), res.Via)
+		LogDev("[连通] %s 已恢复:数据面可达 %s(经 %s)", desc, fmtLat(res.Latency), res.Via)
+		LogUser("info", "peer_ok", fmt.Sprintf("与 %s 的连接已恢复", desc))
 		return
 	}
 	if res.State == layerOK {
 		return
 	}
-	log.Printf("[连通] %s 故障:%s(隧道=%s ICMP=%s TCP=%s)", desc, res.StateText,
+	LogDev("[连通] %s 故障:%s(隧道=%s ICMP=%s TCP=%s)", desc, res.StateText,
 		fmtLat(res.Tunnel), fmtLat(res.ICMP), fmtLat(res.TCP))
+	LogUser("warn", "peer_bad", fmt.Sprintf("连不上 %s", desc))
 	for i, s := range res.Steps {
-		log.Printf("[排查] %d. %s", i+1, s)
+		LogDev("[排查] %d. %s", i+1, s)
 	}
 }
 
 // ---------- 健康巡检 ----------
 
 type issue struct {
-	Code  string   `json:"code"`
-	Text  string   `json:"text"`
-	Steps []string `json:"steps"`
+	Code      string   `json:"code"`
+	Text      string   `json:"text"`       // 开发用，含技术名词
+	Steps     []string `json:"steps"`      // 开发用排查步骤
+	UserText  string   `json:"user_text"`  // 用户用，动词开头
+	UserSteps []string `json:"user_steps"` // 用户用，1~3 步
 }
 
 type healthReport struct {
@@ -596,7 +599,13 @@ func buildHealth() healthReport {
 		if home := ztHome(); !isASCII(home) {
 			steps = append(steps, "检测到 ZeroTier 家目录含非 ASCII 字符,若实例反复启动失败,请把 Windows 用户名改为英文或设置 ZT_HOME 指向纯英文路径: "+home)
 		}
-		rep.Issues = append(rep.Issues, issue{Code: "node_down", Text: text, Steps: steps})
+		rep.Issues = append(rep.Issues, issue{
+			Code:      "node_down",
+			Text:      text,
+			Steps:     steps,
+			UserText:  "后台服务没有响应",
+			UserSteps: []string{"打开「诊断」看最近事件", "重启 LANBridge", "还不行就重装"},
+		})
 		return rep
 	}
 
@@ -607,12 +616,24 @@ func buildHealth() healthReport {
 			anyReady = true
 			continue
 		}
-		rep.Issues = append(rep.Issues, issue{Code: "net_not_ready:" + ns.NetworkID, Text: ns.Reason, Steps: ns.Steps})
+		rep.Issues = append(rep.Issues, issue{
+			Code:      "net_not_ready:" + ns.NetworkID,
+			Text:      ns.Reason,
+			Steps:     ns.Steps,
+			UserText:  "你这台机器的虚拟网卡还没建出来",
+			UserSteps: []string{"点「诊断」里的「重新检测」", "以管理员身份重启 LANBridge", "首次启动时请允许弹窗授权"},
+		})
 	}
 	if ok, lat := planetState(); ok {
 		rep.PlanetOK, rep.PlanetLatency = true, lat
 	} else if planetShouldAlarm(false, anyReady) {
-		rep.Issues = append(rep.Issues, issue{Code: "planet_down", Text: "无法连接 ZeroTier planet 根节点", Steps: planetSteps()})
+		rep.Issues = append(rep.Issues, issue{
+			Code:      "planet_down",
+			Text:      "无法连接 ZeroTier planet 根节点",
+			Steps:     planetSteps(),
+			UserText:  "连不上房间服务器",
+			UserSteps: []string{"检查网络能否访问服务器", "稍等 1 分钟后重试"},
+		})
 	}
 	return rep
 }
@@ -637,9 +658,12 @@ func logHealth(rep healthReport) {
 		if !logOnceHealth(is.Code, false) {
 			continue
 		}
-		log.Printf("[健康] 异常:%s", is.Text)
+		LogDev("[健康] 异常:%s", is.Text)
+		if strings.HasPrefix(is.Code, "net_not_ready:") {
+			LogUser("warn", "net_not_ready", "你这台机器的虚拟网卡没建出来")
+		}
 		for i, s := range is.Steps {
-			log.Printf("[排查] %d. %s", i+1, s)
+			LogDev("[排查] %d. %s", i+1, s)
 		}
 	}
 	logHealthRecovered(current)
@@ -664,7 +688,10 @@ func logHealthRecovered(current map[string]issue) {
 	}
 	reachMu.Unlock()
 	for _, code := range recovered {
-		log.Printf("[健康] 已恢复:%s", code)
+		LogDev("[健康] 已恢复:%s", code)
+		if strings.HasPrefix(code, "net_not_ready:") {
+			LogUser("info", "net_ready", "虚拟网络已连上，可以邀请朋友了")
+		}
 	}
 }
 

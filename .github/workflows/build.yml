@@ -22,6 +22,13 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build and verify frontend
+        run: |
+          cd client/ui && npm ci && npm run build
+          git diff --exit-code ../static/index.html
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'

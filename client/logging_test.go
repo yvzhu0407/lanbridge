@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,5 +99,48 @@ func TestRotateLog(t *testing.T) {
 	rotateLog(small)
 	if _, err := os.Stat(small); err != nil {
 		t.Fatal("小文件不应被轮转")
+	}
+}
+
+func TestHandleLogsDualStream(t *testing.T) {
+	origPath := logFilePath
+	defer func() { logFilePath = origPath }()
+
+	dir := t.TempDir()
+	logFilePath = filepath.Join(dir, "client.log")
+	content := "d|2026/11/09 10:00:00 [开发] 原始日志1\n" +
+		"u|2026-11-09T10:00:01|info|net_ready|网络就绪\n" +
+		"d|2026/11/09 10:00:02 [开发] 原始日志2\n" +
+		"u|2026-11-09T10:00:03|warn|peer_bad|连不上成员\n"
+	if err := os.WriteFile(logFilePath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	call := func(view string) string {
+		req := httptest.NewRequest("GET", "/api/logs?view="+view, nil)
+		w := httptest.NewRecorder()
+		handleLogs(w, req)
+		res := w.Result()
+		defer res.Body.Close()
+		var body map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&body)
+		data, _ := body["data"].(map[string]any)
+		logs, _ := data["logs"].(string)
+		return logs
+	}
+
+	userLogs := call("user")
+	if strings.Contains(userLogs, "[开发]") || !strings.Contains(userLogs, "网络就绪") || strings.Contains(userLogs, "u|") {
+		t.Fatalf("user view 格式错误: %q", userLogs)
+	}
+
+	devLogs := call("dev")
+	if strings.Contains(devLogs, "网络就绪") || !strings.Contains(devLogs, "原始日志1") || strings.Contains(devLogs, "d|") {
+		t.Fatalf("dev view 格式错误: %q", devLogs)
+	}
+
+	allLogs := call("")
+	if !strings.Contains(allLogs, "u|") || !strings.Contains(allLogs, "d|") {
+		t.Fatalf("all view 应保留原始行: %q", allLogs)
 	}
 }

@@ -29,6 +29,15 @@ jobs:
         with:
           go-version: '1.27'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 构建并校验前端
+        run: |
+          cd client/ui && npm ci && npm run build
+          git diff --exit-code ../static/index.html
+
       - name: 准备内嵌 ZeroTier
         run: |
           # msiextract 用来解 ZeroTier 的 .msi（取 zerotier-one_x64.exe）
