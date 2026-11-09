@@ -47,6 +47,9 @@ type netState struct {
 	Ready     bool     `json:"ready"`
 	Reason    string   `json:"reason,omitempty"`
 	Steps     []string `json:"steps,omitempty"`
+	// Rev = netconfRevision。0 表示加入后一直没拿到过服务端下发的网络配置,
+	// 自愈据此判断"该重新 join 强制再拉一次"。
+	Rev int `json:"rev"`
 }
 
 func mapStr(m map[string]any, k string) string {
@@ -101,6 +104,7 @@ func parseNetState(m map[string]any) netState {
 		Device:    mapStr(m, "portDeviceName"),
 		PortError: mapInt(m, "portError"),
 		IPs:       mapStrs(m, "assignedAddresses"),
+		Rev:       mapInt(m, "netconfRevision"),
 	}
 	switch {
 	case ns.Status == "OK" && ns.Device != "" && ns.PortError == 0 && len(ns.IPs) > 0:
@@ -234,10 +238,57 @@ func lookupPeerCLI(nodeID string) peerTunnel {
 		if paths, ok := p["paths"].([]any); ok {
 			pt.Paths = len(paths)
 		}
-		pt.Live = pt.Latency >= 0
+		pt.Live = peerLive(p, peerLiveWindow)
 		return pt
 	}
 	return peerTunnel{}
+}
+
+// peerLiveWindow: 一条活跃路径在这么久内收到过包,就认为链路还活着。
+// ZeroTier 的 HELLO 周期是 10s,放宽到 60s 容忍抖动,同时又不至于把
+// 早已断开的节点判成可达。
+const peerLiveWindow = 60 * time.Second
+
+// peerLive 判断某个 peer 当前是否可达。
+//
+// 不能用 latency 的正负来判活:ZeroTier 对 PLANET 等 peer 的 latency 字段会报出
+// 负值(线上实测 planet latency=-692,但其 preferred 路径 16s 前还在收包)。
+// 这时链路明明是通的,却会因为 latency<0 被判成"无法连接 planet"(红灯误报)。
+// 真正的存活信号是:存在一条 active 且未过期、且最近 peerLiveWindow 内收到过包的路径。
+//
+// 没有 paths 字段时退回 latency>=0,兼容不提供路径信息的输出。
+func peerLive(p map[string]any, window time.Duration) bool {
+	if paths, ok := p["paths"].([]any); ok && len(paths) > 0 {
+		return freshPath(paths, window)
+	}
+	if lat, ok := p["latency"].(float64); ok {
+		return lat >= 0
+	}
+	return false
+}
+
+func freshPath(paths []any, window time.Duration) bool {
+	now := time.Now().UnixMilli()
+	for _, raw := range paths {
+		pm, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if active, _ := pm["active"].(bool); !active {
+			continue
+		}
+		if expired, _ := pm["expired"].(bool); expired {
+			continue
+		}
+		lr, ok := pm["lastReceive"].(float64)
+		if !ok {
+			continue
+		}
+		if now-int64(lr) <= window.Milliseconds() {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------- 数据层 ----------
@@ -305,29 +356,29 @@ func probePeer(ip, nodeID string, local netState) probeResult {
 		return res
 	}
 
-	// 第 2 层:隧道。有 latency 说明两台 ZeroTier 进程已经换了包。
-	// 隧道都没建立就直接下结论:此时数据面必然不通,再去等 ICMP/TCP 超时
-	// 只会让界面卡上好几秒,成员越多越明显。
 	var tunnel peerTunnel
 	if nodeID != "" {
 		tunnel = peerLookup(nodeID)
-		if tunnel.Found && tunnel.Latency >= 0 {
-			res.Tunnel = tunnel.Latency
-		}
 	}
-	if res.Tunnel < 0 {
+	// 第 2 层:隧道。有可用路径在收包说明两台 ZeroTier 进程已经换了包。
+	// 但"没有新鲜直连路径"不等于不通:走中继(relay)时,ZeroTier 在 LEAF 上
+	// 往往不记录直连路径(latency=-1、paths=[]),数据其实经 planet 中继能通。
+	// 所以只有"对端根本不在 peers 列表"时才敢直接下结论并跳过实测。
+	if !tunnel.Found {
 		res.State = layerNoTunnel
-		if tunnel.Found {
-			// 在 peers 列表里但没握手,和"根本不在列表"是两种故障,
-			// 排查方向完全不同,不能给同一套建议。
-			res.StateText = "链路协商中"
-			res.Steps = handshakePendingSteps(ip, nodeID)
-		} else {
-			res.StateText = "链路未建立"
-			res.Steps = noTunnelSteps(ip, nodeID)
-		}
+		res.StateText = "链路未建立"
+		res.Steps = noTunnelSteps(ip, nodeID)
 		return res
 	}
+	if tunnel.Live {
+		// 活着但 latency 未知时用 0 表示"通但延迟未测出",避免下发 -1 被界面显示成"超时"。
+		res.Tunnel = tunnel.Latency
+		if res.Tunnel < 0 {
+			res.Tunnel = 0
+		}
+	}
+	// 走到这里说明对端已被发现。即使尚未直连(relay / 握手未完成),也要实测数据面:
+	// 中继链路同样能通,不能因为看不到直连路径就判死。
 
 	// 第 3 层:数据面。ICMP 是最直接的真实 ping;被拦时退到 TCP 端口探测。
 	if ip != "" {
@@ -345,6 +396,14 @@ func probePeer(ip, nodeID string, local netState) probeResult {
 		}
 	}
 
+	if !tunnel.Live {
+		// 本来就没有新鲜直连路径(relay / 握手未完成),数据面也实测不通:
+		// 仍属"协商中"。这里给的是排查建议,不能当成"隧道通但数据不通"。
+		res.State = layerNoTunnel
+		res.StateText = "链路协商中"
+		res.Steps = handshakePendingSteps(ip, nodeID)
+		return res
+	}
 	res.State = layerTunnelOnly
 	res.StateText = "隧道通·数据不通"
 	res.Steps = tunnelOnlySteps(ip, local, res.Tunnel)
@@ -463,6 +522,9 @@ type healthReport struct {
 	PlanetOK      bool       `json:"planet_ok"`
 	PlanetLatency int        `json:"planet_latency"`
 	Issues        []issue    `json:"issues"`
+	// 后台自愈状态:界面据此显示"自动恢复中"而不是干等。
+	Recovering  bool   `json:"recovering"`
+	RecoverNote string `json:"recover_note,omitempty"`
 }
 
 // netsCache 与 peersCache 同理:一轮测速里所有成员共用同一份网络状态。
@@ -497,15 +559,21 @@ func planetState() (bool, int) {
 		if mapStr(p, "role") != "PLANET" {
 			continue
 		}
-		if lat, ok := p["latency"].(float64); ok && lat >= 0 {
-			return true, int(lat)
+		if !peerLive(p, peerLiveWindow) {
+			continue
 		}
+		lat := -1
+		if l, ok := p["latency"].(float64); ok && l >= 0 {
+			lat = int(l)
+		}
+		return true, lat
 	}
 	return false, -1
 }
 
 func buildHealth() healthReport {
-	rep := healthReport{PlanetLatency: -1}
+	rs := recoverSnapshot()
+	rep := healthReport{PlanetLatency: -1, Recovering: rs.Recovering, RecoverNote: rs.Note}
 	if info, err := ztRun("info"); err == nil {
 		if parts := strings.Fields(info); len(parts) >= 3 {
 			rep.NodeID = parts[2]
@@ -533,18 +601,27 @@ func buildHealth() healthReport {
 	}
 
 	rep.Networks = localNetStates()
+	anyReady := false
 	for _, ns := range rep.Networks {
 		if ns.Ready {
+			anyReady = true
 			continue
 		}
 		rep.Issues = append(rep.Issues, issue{Code: "net_not_ready:" + ns.NetworkID, Text: ns.Reason, Steps: ns.Steps})
 	}
 	if ok, lat := planetState(); ok {
 		rep.PlanetOK, rep.PlanetLatency = true, lat
-	} else {
+	} else if planetShouldAlarm(false, anyReady) {
 		rep.Issues = append(rep.Issues, issue{Code: "planet_down", Text: "无法连接 ZeroTier planet 根节点", Steps: planetSteps()})
 	}
 	return rep
+}
+
+// planetShouldAlarm:planet 不可达只有在"还没有任何可用的虚拟网络"时才算用户可见故障。
+// 一旦有网络就绪,它靠已缓存的配置继续工作,planet 的 UDP 抖动不影响联机;此时报红
+// 只会误导——线上正是它在健康面板里对着已连上的网络反复闪红。
+func planetShouldAlarm(planetOK, anyNetReady bool) bool {
+	return !planetOK && !anyNetReady
 }
 
 // logHealth 把巡检结论写进日志(同样按状态变化去重)。

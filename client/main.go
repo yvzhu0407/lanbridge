@@ -144,6 +144,8 @@ func main() {
 
 	// 后台健康巡检:界面没打开时,网络未就绪/planet 不可达也会写进 client.log
 	startHealthWatch()
+	// 后台自愈:守护进程挂掉/网络丢失/长时间不就绪时自动恢复,无需用户手动操作
+	startSupervisor()
 
 	// 上次进程异常退出可能留下网卡跃点调整,趁当前还没加入房间先恢复
 	restoreStaleTune()
@@ -441,6 +443,25 @@ func startZTInstance() error {
 	}
 }
 
+// restartZTDaemon 强制结束本机残留/卡死的 zt-node 实例,再拉起一个干净的。
+// 用于"实例还在应答 info,但 join 怎么都不落进 listnetworks"的卡死场景——
+// 此时 ensureZTReady 会因为 ztRunning()==true 直接返回,单靠它永远救不回来。
+// 只杀我们自己的实例:Windows 按镜像名 zt-node.exe;macOS 按运行路径匹配,
+// 避开系统 ZeroTier(进程名 zerotier-one)。
+func restartZTDaemon() error {
+	switch runtime.GOOS {
+	case "windows":
+		_, _ = hideCmd("taskkill", "/F", "/IM", "zt-node.exe").CombinedOutput()
+	case "darwin":
+		_, _ = hideCmd("pkill", "-f", filepath.Join(ztRuntimeDir(), "zt-node")).CombinedOutput()
+	}
+	// 等控制端口释放,否则新实例会因端口占用而起不来。
+	for i := 0; i < 30 && ztDaemonListening(); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	return ensureZTReady()
+}
+
 func ztCLI() []string {
 	if v := os.Getenv("ZT_CLI"); v != "" { // 整个命令覆盖
 		return strings.Fields(v)
@@ -622,6 +643,7 @@ func handleZTJoin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.NetworkID == "" {
+		clearDesiredNet()
 		restoreNetwork()
 		okJSON(w, map[string]any{"left": true})
 		return
@@ -630,14 +652,26 @@ func handleZTJoin(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, 503, "ZeroTier 未就绪: "+err.Error())
 		return
 	}
+	// 清掉上一轮遗留的建卡失败日志,确保下面读到的端口提示只反映本次 join,
+	// 而不是几天前的旧错误——旧日志会让排障方向完全跑偏。
+	if runtime.GOOS == "windows" {
+		_ = os.Remove(filepath.Join(ztHome(), "port_error_log.txt"))
+	}
 	if out, err := ztRun("join", req.NetworkID); err != nil {
 		errJSON(w, 500, "join 失败: "+out)
 		return
 	}
-	// join 的退出码不能作为成功依据:驱动缺失时 CLI 照样返回 "200 join OK",
-	// 但网络根本没进状态表(实测 listnetworks 仍为 [])。必须再查一次确认。
-	if net, _ := findNetwork(req.NetworkID); net == nil {
-		msg := "ZeroTier 拒绝加入网络: join 返回成功但网络未出现在本地列表"
+	// 交给后台自愈守护:即便本地状态暂未就绪(或下面 8s 窗口内没出现),
+	// supervisor 也会持续把它接回来,不依赖这次请求当场成功。
+	setDesiredNet(req.NetworkID)
+	// join 的退出码不能作为成功依据,但也绝不能"join 后立刻查一次查不到就判失败":
+	// 慢机 / 杀软扫描下本地状态表登记会有滞后,立即读取会把"还没登记"误判成"被拒绝"。
+	// 轮询几秒,等网络真正出现在 listnetworks 里再下结论。
+	if net, _ := waitForNetwork(req.NetworkID, 8*time.Second); net == nil {
+		msg := "ZeroTier 已接受 join,但网络暂未出现在本地列表(后台会自动重试)"
+		if diag := driverFileSummary(); diag != "" {
+			msg += " — " + diag
+		}
 		if pe := ztPortErrorHint(); pe != "" {
 			msg += " — " + pe
 		}
@@ -675,6 +709,45 @@ func findNetwork(networkID string) (map[string]any, error) {
 		}
 	}
 	return nil, nil
+}
+
+// waitForNetwork 轮询 listnetworks,直到指定网络出现或超时。
+// join 之后本地状态表可能滞后(慢机 / 杀软扫描下常见),立即读取会把
+// "还没登记"误判成"被拒绝"。出现即返回条目,超时返回 nil。
+func waitForNetwork(networkID string, timeout time.Duration) (map[string]any, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		net, err := findNetwork(networkID)
+		if err == nil && net != nil {
+			return net, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// driverFileSummary 汇报 TAP 驱动三件套是否就位(仅 Windows 有意义)。
+// 用来区分两种截然不同的故障:文件不在/为空(被杀软删除或未解压成功),
+// 与文件在但 ZeroTier 仍读不到(多为未以管理员运行或被安全软件拦截)。
+func driverFileSummary() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	var miss, ok []string
+	for _, n := range []string{"zttap300.inf", "zttap300.sys", "zttap300.cat"} {
+		fi, err := os.Stat(filepath.Join(ztHome(), n))
+		if err != nil || fi.Size() == 0 {
+			miss = append(miss, n)
+		} else {
+			ok = append(ok, fmt.Sprintf("%s=%dB", n, fi.Size()))
+		}
+	}
+	if len(miss) > 0 {
+		return "驱动文件缺失/为空(" + strings.Join(miss, ",") + "):可能被杀毒删除或未解压成功,见 " + ztHome()
+	}
+	return "驱动文件已就位(" + strings.Join(ok, ",") + "),若仍报 INF 读不到,多是未以管理员运行或被安全软件拦截"
 }
 
 // ztPortErrorHint 把常见的建卡失败原因翻译成一句可操作的话。

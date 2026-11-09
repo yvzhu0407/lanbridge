@@ -194,9 +194,26 @@ func TestProbePeerHandshakePending(t *testing.T) {
 	if !strings.Contains(joined, "协商") && !strings.Contains(joined, "等待") {
 		t.Fatalf("应提示是路径协商中: %v", res.Steps)
 	}
-	// 未握手时同样不该去发数据包
+	// 数据面也实测不通时,依然不能判可达
 	if res.Reachable {
 		t.Fatal("未握手不能判可达")
+	}
+}
+
+// 走中继(relay)时 ZeroTier 在 LEAF 上常常没有直连路径(paths=[]、latency=-1),
+// 表现为"已发现但未握手"。但数据经中继其实能通——实测文明6 联机正常。此时必须
+// 靠数据面实测判可达,不能因为看不到直连路径就报"协商中/红灯"。
+func TestProbePeerHandshakePendingButRelayWorks(t *testing.T) {
+	pending := func(id string) peerTunnel {
+		return peerTunnel{Found: true, NodeID: id, Live: false, Latency: -1, Paths: 0}
+	}
+	stubProbes(t, up(330), down(), pending)
+	res := probePeer("10.147.1.1", "7fc64952d6", readyNet)
+	if res.State != layerOK || !res.Reachable || res.Via != "icmp" || res.Latency != 330 {
+		t.Fatalf("中继能通时应判可达: %+v", res)
+	}
+	if len(res.Steps) != 0 {
+		t.Fatalf("可达时不该带排查步骤: %v", res.Steps)
 	}
 }
 
@@ -353,6 +370,71 @@ func TestPeerSnapshotSharedWithPlanet(t *testing.T) {
 	mu.Unlock()
 	if got != 1 {
 		t.Fatalf("应共用快照只调 1 次, 实际 %d 次", got)
+	}
+}
+
+// 线上真实故障:planet 的 latency 报成负值(实测 -692),但它的 preferred 路径
+// 16 秒前还在收包。旧逻辑用 latency>=0 判活,于是把明明可达的 planet 误报成
+// "无法连接 ZeroTier planet 根节点"(红灯)。存活信号必须是"活跃路径最近收到过包"。
+func TestPlanetStateNegativeLatencyButFreshPath(t *testing.T) {
+	resetReachCache()
+	now := time.Now().UnixMilli()
+	orig := ztQuery
+	ztQuery = func(args ...string) (string, error) {
+		return fmt.Sprintf(`[{"address":"bd5b8ad96c","latency":-692,"role":"PLANET",`+
+			`"paths":[{"active":true,"expired":false,"preferred":true,"lastReceive":%d,"lastSend":%d}]}]`,
+			now, now), nil
+	}
+	t.Cleanup(func() { ztQuery = orig; resetReachCache() })
+
+	if ok, _ := planetState(); !ok {
+		t.Fatal("planet 有活跃路径且在收包,必须判定可达:负 latency 不等于不可达")
+	}
+}
+
+// 反过来也要保证不会把早已断开的 planet 判成可达:路径很久没收到包就是不通。
+func TestPlanetStateStalePathUnreachable(t *testing.T) {
+	resetReachCache()
+	old := time.Now().Add(-5 * time.Minute).UnixMilli()
+	orig := ztQuery
+	ztQuery = func(args ...string) (string, error) {
+		return fmt.Sprintf(`[{"address":"p","latency":-1,"role":"PLANET",`+
+			`"paths":[{"active":true,"expired":false,"lastReceive":%d}]}]`, old), nil
+	}
+	t.Cleanup(func() { ztQuery = orig; resetReachCache() })
+
+	if ok, _ := planetState(); ok {
+		t.Fatal("planet 路径 5 分钟没收到包,应判定不可达")
+	}
+}
+
+// 已经连上虚拟网络时,planet 的 UDP 抖动不该再作为故障报红——否则健康面板
+// 会对着一个正常可玩的网络反复闪"planet 不可达",误导用户。
+func TestPlanetShouldAlarmOnlyWhenNoNetReady(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		planetOK    bool
+		anyNetReady bool
+		want        bool
+	}{
+		{"planet可达不报警", true, false, false},
+		{"planet不可达且无网络就绪要报警", false, false, true},
+		{"planet不可达但有网络就绪不报警", false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := planetShouldAlarm(tc.planetOK, tc.anyNetReady); got != tc.want {
+				t.Fatalf("planetShouldAlarm=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// 自愈靠 netconfRevision 判断"该重新拉配置",解析必须把它读进来。
+func TestParseNetStateReadsRev(t *testing.T) {
+	m := netJSON("n", "REQUESTING_CONFIGURATION", "", 0)
+	m["netconfRevision"] = float64(3)
+	if ns := parseNetState(m); ns.Rev != 3 {
+		t.Fatalf("应读取 netconfRevision, got %d", ns.Rev)
 	}
 }
 

@@ -1098,7 +1098,7 @@
             <span style="display:flex;align-items:center;gap:4px"><span class="ping-dot good"></span> 35-80ms 良好</span>
             <span style="display:flex;align-items:center;gap:4px"><span class="ping-dot fair"></span> &gt;80ms 偏高</span>
           </div>
-          <span>后台自动测速中</span>
+          <span id="membersFootHint">后台自动测速中</span>
         </div>
       </div>
     </section>
@@ -1360,7 +1360,11 @@ async function syncHealth() {
   state.health = rep;
   const hd = $('heroDot');
   const readyNets = (rep.networks || []).filter(n => n.ready);
-  if (rep.issues && rep.issues.length) {
+  if (rep.recovering) {
+    // 后台正在自动恢复:用"等待"色而不是红色,避免用户误以为彻底失败。
+    hd.className = 'status-dot wait';
+    $('heroText').textContent = rep.recover_note ? ('自动恢复中：' + rep.recover_note) : '正在自动恢复…';
+  } else if (rep.issues && rep.issues.length) {
     hd.className = 'status-dot err';
     $('heroText').textContent = rep.issues[0].text;
   } else if (readyNets.length) {
@@ -1393,20 +1397,38 @@ function renderHealthPanel(rep) {
         <div class="health-issue-title">⚠ ${escapeHtml(is.text)}</div>
         <ol class="health-steps">${(is.steps || []).map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
       </div>`).join('');
+  const recoverHtml = rep.recovering ? `
+      <div class="health-issue" style="border-color:var(--warn,#d97706)">
+        <div class="health-issue-title">🔄 自动恢复中：${escapeHtml(rep.recover_note || '正在重连')}</div>
+        <div class="health-empty">已交给后台自动处理，无需手动操作；若长时间未恢复，再点开日志排查。</div>
+      </div>` : '';
+  // planet 只是采样瞬间不可达、但本地网络已就绪时，用中性黄色“暂时抖动”而不是红色“不可达”，
+  // 避免对一个实际能玩的网络反复闪红。
+  const anyReady = nets.some(n => n.ready);
+  const planetDot = rep.planet_ok ? 'excellent' : (anyReady ? 'fair' : 'timeout');
+  const planetText = rep.planet_ok ? '可达' : (anyReady ? '暂时抖动' : '不可达');
+  const planetLat = rep.planet_ok
+    ? (rep.planet_latency >= 0 ? rep.planet_latency + ' ms' : '已连接')
+    : (anyReady ? '已用缓存配置' : '-');
+  const summaryHtml = (issues.length || rep.recovering) ? ''
+    : (rep.planet_ok
+        ? '<div class="health-empty" style="color:var(--ok)">✓ 本机虚拟网络与 planet 链路均正常</div>'
+        : '<div class="health-empty" style="color:var(--warn)">✓ 本机虚拟网络已就绪（planet 偶有抖动，不影响已连上的网络）</div>');
   box.innerHTML = `
     <div class="health-row health-head">
       <span></span><span>网络</span><span>状态</span><span>网卡</span><span>分配 IP</span>
     </div>
     ${netRows || '<div class="health-empty">尚未加入任何房间网络</div>'}
+    ${recoverHtml}
     <div class="health-row" style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
-      <span class="ping-dot ${rep.planet_ok ? 'excellent' : 'timeout'}"></span>
+      <span class="ping-dot ${planetDot}"></span>
       <span>planet 根节点</span>
-      <span>${rep.planet_ok ? '可达' : '不可达'}</span>
+      <span>${planetText}</span>
       <span></span>
-      <span class="mono">${rep.planet_ok ? rep.planet_latency + ' ms' : '-'}</span>
+      <span class="mono">${planetLat}</span>
     </div>
     ${issueHtml}
-    ${issues.length ? '' : '<div class="health-empty" style="color:var(--ok)">✓ 本机虚拟网络与 planet 链路均正常</div>'}
+    ${summaryHtml}
   `;
 }
 
@@ -1656,6 +1678,8 @@ async function pollRoomStatus() {
       }
       state.joined = false;
       state.currentRoom = null;
+      // 房间已不在:顺手退出虚拟网络,让后台自愈停下,别维持一个没用的网络。
+      api('/api/zt/join', { network_id: '', leave: 'all' }).catch(() => {});
       $('pillRoom').classList.add('hidden');
       $('lobbyBackBar').classList.add('hidden');
       $('mCurrentIp').textContent = '--';
@@ -1777,7 +1801,8 @@ function updateRoomNetAlert(cr) {
     return;
   }
   box.classList.remove('hidden');
-  $('roomNetAlertTitle').textContent = net.reason || '本机虚拟网络未就绪';
+  const recovering = !!(health && health.recovering);
+  $('roomNetAlertTitle').textContent = (recovering ? '自动恢复中 · ' : '') + (net.reason || '本机虚拟网络未就绪');
   $('roomNetAlertSteps').innerHTML = (net.steps || []).map(s => `<li>${escapeHtml(s)}</li>`).join('');
 }
 
@@ -1829,6 +1854,21 @@ async function loadMembersAndPing(manual = false) {
 
   state.members = members || [];
   $('membersCountSummary').textContent = `${state.members.length} 位成员在房间中`;
+
+  // 只有自己在房间时，给出最直接的加入指引：让对方在大厅按房间名加入。
+  const others = state.members.filter(m => !isSelfMember(m)).length;
+  const hint = $('membersFootHint');
+  if (hint) {
+    if (others === 0) {
+      const rn = (state.rooms.find(r => r.id === roomId) || {}).name
+        || (state.currentRoom && state.currentRoom.name) || ('#' + roomId);
+      hint.textContent = `房间里只有你 — 让好友在大厅加入房间「${rn}」`;
+      hint.style.color = 'var(--warn)';
+    } else {
+      hint.textContent = '后台自动测速中';
+      hint.style.color = '';
+    }
+  }
 
   renderMembersTable();
 
