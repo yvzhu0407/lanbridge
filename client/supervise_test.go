@@ -57,7 +57,9 @@ func TestPlanRecoveryDecision(t *testing.T) {
 		{"已就绪", false, true, readyNetOn("n"), true, true, time.Minute, actNone},
 		{"宽限期内不动", false, true, notReady, true, false, 5 * time.Second, actWait},
 		{"planet 不可达不重连", false, true, notReady, false, true, time.Minute, actWait},
-		{"端口报错不重进", false, true, portErr, true, false, time.Minute, actWait},
+		{"端口报错宽限期内不动", false, true, portErr, true, false, 5 * time.Second, actWait},
+		// 建卡失败过宽限期后 leave+join 重建网卡(leave 拆掉失败端口),不再死等人工。
+		{"端口报错过宽限期重进重建", false, true, portErr, true, false, time.Minute, actRejoin},
 		{"长时间不就绪重进", false, true, notReady, true, true, time.Minute, actRejoin},
 		// 从未拿到过配置的节点:planet 只是采样瞬间不可达,卡久了仍应强制重拉。
 		{"从未配置久卡即使planet抖动也重进", false, true, notReady, false, false, notConfiguredHorizon + time.Second, actRejoin},

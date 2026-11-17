@@ -340,6 +340,7 @@ CREATE TABLE IF NOT EXISTS users(
 CREATE TABLE IF NOT EXISTS rooms(
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	seq INTEGER NOT NULL,
+	net_seq INTEGER,
 	network_id TEXT UNIQUE NOT NULL,
 	game TEXT NOT NULL,
 	name TEXT NOT NULL,
@@ -357,6 +358,12 @@ CREATE TABLE IF NOT EXISTS members(
 	authorized INTEGER DEFAULT 0,
 	joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY(user_id, room_id)
+);
+-- counters: 单调递增的计数器。网络 ID 序号存在这里而不是 MAX(net_seq),
+-- 这样删掉历史房间也不会让序号回退、导致网络 ID 复用。
+CREATE TABLE IF NOT EXISTS counters(
+	name TEXT PRIMARY KEY,
+	value INTEGER NOT NULL DEFAULT 0
 );
 `)
 	if err != nil {
@@ -405,7 +412,43 @@ CREATE TABLE IF NOT EXISTS members(
 			log.Printf("[migrate] 成功为 rooms 表添加 last_touch_at 字段")
 		}
 	}
+	// net_seq: 网络 ID 的单调递增序号, 一经分配永不复用。
+	//
+	// 旧实现直接用 seq 拼网络 ID, 而 seq 会在房间销毁后复用。销毁房间会删掉控制器
+	// 上的整个网络, 于是"新房间拿到旧网络 ID、控制器上却没有这个网络"——客户端
+	// 表现为 ACCESS_DENIED / 网卡建不出来, 且服务端 DB 里 authorized=1 让它走只读
+	// 复核分支, 不会自动补授权。
+	//
+	// 已有关闭房间的 net_seq 按 seq 回填, 保证历史网络 ID 不会被重新分配。
+	if !hasColumn(db, "rooms", "net_seq") {
+		if _, err := db.Exec(`ALTER TABLE rooms ADD COLUMN net_seq INTEGER`); err != nil {
+			log.Printf("[migrate] 添加 net_seq 字段失败: %v", err)
+		} else {
+			_, _ = db.Exec(`UPDATE rooms SET net_seq = seq WHERE net_seq IS NULL`)
+			log.Printf("[migrate] 成功为 rooms 表添加 net_seq 字段")
+		}
+	}
+	// 计数器起步值取历史最大 net_seq, 保证升级后不会重新发放已用过的网络号。
+	// ON CONFLICT 取较大值: 迁移可能被重复执行, 且历史行可能在首次迁移后才补齐。
+	if _, err := db.Exec(`INSERT INTO counters(name, value)
+		VALUES('net_seq', (SELECT COALESCE(MAX(net_seq), 0) FROM rooms))
+		ON CONFLICT(name) DO UPDATE SET value = MAX(counters.value, excluded.value)`); err != nil {
+		log.Printf("[migrate] 初始化 net_seq 计数器失败: %v", err)
+	}
 	return nil
+}
+
+// allocNetSeq 原子地取用下一个网络 ID 序号。必须在 s.mu 内调用。
+// 用计数器而不是 MAX(net_seq): 历史房间被删除后序号仍不会回退, 网络 ID 永不复用。
+func allocNetSeq(db *sql.DB) (int, error) {
+	if _, err := db.Exec(`UPDATE counters SET value = value + 1 WHERE name = 'net_seq'`); err != nil {
+		return 0, err
+	}
+	var n int
+	if err := db.QueryRow(`SELECT value FROM counters WHERE name = 'net_seq'`).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // hasColumn: 判断某表是否已有某列(已有库升级用)
@@ -514,7 +557,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *User) {
 		FROM members m JOIN rooms ro ON ro.id=m.room_id WHERE m.user_id=?`, u.ID).
 		Scan(&roomID, &netID, &ip, &roomName)
 	okJSON(w, map[string]any{
-		"name": u.Name, "zt_node_id": u.ZTNodeID,
+		"id": u.ID, "name": u.Name, "zt_node_id": u.ZTNodeID,
 		"room_id": roomID, "network_id": netID, "ip": ip, "room_name": roomName,
 	})
 }
@@ -610,14 +653,16 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request, u *Use
 		return
 	}
 	if req.ZTNodeID != "" {
-		_, _ = s.db.Exec(`UPDATE users SET zt_node_id=? WHERE id=?`, req.ZTNodeID, u.ID)
 		u.ZTNodeID = req.ZTNodeID
 	}
-	// 已在某房间 → 先按切换语义:服务端移出旧房
-	s.leaveCurrent(w, r, u)
+	if u.ZTNodeID == "" {
+		errJSON(w, 400, "缺少 ZeroTier 节点ID,请先运行客户端")
+		return
+	}
 
 	s.mu.Lock()
-	// 取可用网络序号(复用 1~254 中未被当前活跃房间占用的最小编号)
+	// 取可用 IP 子网序号(复用 1~254 中未被当前活跃房间占用的最小编号)。
+	// 注意: 这只决定 10.147.<seq>.0/24, 与网络 ID 无关。
 	usedSeq := make(map[int]bool)
 	rows, err := s.db.Query(`SELECT seq FROM rooms WHERE closed=0`)
 	if err == nil {
@@ -641,18 +686,28 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request, u *Use
 		errJSON(w, 500, "网络号耗尽(当前活跃房间已达上限 254 个)")
 		return
 	}
-	// 清理复用 seq 上已关闭的残留记录, 避免 UNIQUE 索引冲突
-	_, _ = s.db.Exec(`DELETE FROM rooms WHERE closed=1 AND seq=?`, seq)
+	// 注意: 这里不再删除 seq 上已关闭的残留记录。
+	// 关闭房间要保留下来, net_seq 才能单调递增 —— 删掉历史行会让 MAX(net_seq)
+	// 回退, 网络 ID 又被复用, 重新踩回"控制器上网络不存在"的坑。
 
-	nwid := fmt.Sprintf("bd5b8ad96c%06x", seq) // 控制器ID前缀 + 6位hex序号
+	// 网络 ID 序号: 永不复用。
+	// 销毁房间会删控制器网络, 若网络 ID 跟着 seq 复用, 新房间就会指向一个
+	// 控制器上不存在的网络(客户端 ACCESS_DENIED 且不会自动补授权)。
+	netSeq, err := allocNetSeq(s.db)
+	if err != nil {
+		s.mu.Unlock()
+		errJSON(w, 500, "分配网络号失败: "+err.Error())
+		return
+	}
+	nwid := fmt.Sprintf("bd5b8ad96c%06x", netSeq) // 控制器ID前缀 + 6位hex网络序号
 	// 建网络(zas 实测:POST + PUT 配置)
 	if err := s.zt.CreateNetwork(nwid, req.Name, ipFor(seq, 253), ipFor(seq, 254), cidrFor(seq)); err != nil {
 		s.mu.Unlock()
 		errJSON(w, 500, "创建网络失败: "+err.Error())
 		return
 	}
-	res, err := s.db.Exec(`INSERT INTO rooms(seq, network_id, game, name, password, owner_id) VALUES(?,?,?,?,?,?)`,
-		seq, nwid, req.Game, req.Name, req.Password, u.ID)
+	res, err := s.db.Exec(`INSERT INTO rooms(seq, net_seq, network_id, game, name, password, owner_id) VALUES(?,?,?,?,?,?,?)`,
+		seq, netSeq, nwid, req.Game, req.Name, req.Password, u.ID)
 	if err != nil {
 		_ = s.zt.DeleteNetwork(nwid)
 		s.mu.Unlock()
@@ -663,12 +718,15 @@ func (s *Server) handleCreateRoom(w http.ResponseWriter, r *http.Request, u *Use
 	s.touchRoom(roomID)
 	s.mu.Unlock() // joinInternal 内部会再锁;不能持锁调用
 	if !s.joinInternal(u, roomID, nwid, seq, w) {
-		return // joinInternal 已写错误响应
+		s.mu.Lock()
+		s.destroyRoom(roomID, nwid)
+		s.mu.Unlock()
+		return // 原房间保留，清理未能加入的新房间
 	}
 	okJSON(w, map[string]any{"room_id": roomID, "network_id": nwid})
 }
 
-// handleJoinRoom: 直接 join,服务端把用户从旧房移出
+// handleJoinRoom: 目标登记成功后才移出旧房，同房间重复加入保持幂等。
 // 客户端流程:先上报自己的 zt 节点ID(注册/登录时或本请求),join 后轮询 /api/join/status
 func (s *Server) handleJoinRoom(w http.ResponseWriter, r *http.Request, u *User) {
 	var req struct {
@@ -681,7 +739,6 @@ func (s *Server) handleJoinRoom(w http.ResponseWriter, r *http.Request, u *User)
 		return
 	}
 	if req.ZTNodeID != "" {
-		_, _ = s.db.Exec(`UPDATE users SET zt_node_id=? WHERE id=?`, req.ZTNodeID, u.ID)
 		u.ZTNodeID = req.ZTNodeID
 	}
 	var nwid, pw string
@@ -697,8 +754,6 @@ func (s *Server) handleJoinRoom(w http.ResponseWriter, r *http.Request, u *User)
 		errJSON(w, 403, "房间密码错误")
 		return
 	}
-	// 切换语义:先离开旧房
-	s.leaveCurrent(w, r, u)
 	if !s.joinInternal(u, req.RoomID, nwid, seq, w) {
 		return
 	}
@@ -715,8 +770,12 @@ func (s *Server) joinInternal(u *User, roomID int64, nwid string, seq int, w htt
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// 强制一人一房:清掉该用户在其它房间的残留(防并发 create 造成的多房间登记)
-	_, _ = s.db.Exec(`DELETE FROM members WHERE user_id=? AND room_id!=?`, u.ID, roomID)
+	// 与离房、解散和 GC 使用同一把锁，防止校验后目标房间被关闭。
+	var closed int
+	if err := s.db.QueryRow(`SELECT closed FROM rooms WHERE id=?`, roomID).Scan(&closed); err != nil || closed != 0 {
+		errJSON(w, 404, "房间不存在或已关闭")
+		return false
+	}
 	rows, err := s.db.Query(`SELECT user_id, assigned_ip FROM members WHERE room_id=?`, roomID)
 	if err != nil {
 		errJSON(w, 500, err.Error())
@@ -759,11 +818,72 @@ func (s *Server) joinInternal(u *User, roomID int64, nwid string, seq int, w htt
 		errJSON(w, 500, "房间已满")
 		return false
 	}
-	_, err = s.db.Exec(`INSERT OR REPLACE INTO members(user_id, room_id, zt_node_id, assigned_ip) VALUES(?,?,?,?)`,
-		u.ID, roomID, u.ZTNodeID, ip)
+	// 先记录需撤销的旧授权；事务失败时不动原成员及原网络。
+	oldRows, err := s.db.Query(`SELECT m.room_id, ro.network_id, m.zt_node_id
+		FROM members m JOIN rooms ro ON ro.id=m.room_id
+		WHERE m.user_id=? AND (m.room_id!=? OR m.zt_node_id!=?)`, u.ID, roomID, u.ZTNodeID)
 	if err != nil {
 		errJSON(w, 500, err.Error())
 		return false
+	}
+	type oldMembership struct {
+		roomID            int64
+		networkID, nodeID string
+	}
+	var previous []oldMembership
+	for oldRows.Next() {
+		var old oldMembership
+		if err = oldRows.Scan(&old.roomID, &old.networkID, &old.nodeID); err != nil {
+			break
+		}
+		previous = append(previous, old)
+	}
+	if err == nil {
+		err = oldRows.Err()
+	}
+	oldRows.Close()
+	if err != nil {
+		errJSON(w, 500, err.Error())
+		return false
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		errJSON(w, 500, err.Error())
+		return false
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`INSERT INTO members(user_id, room_id, zt_node_id, assigned_ip) VALUES(?,?,?,?)
+		ON CONFLICT(user_id,room_id) DO UPDATE SET
+		authorized=CASE WHEN members.zt_node_id=excluded.zt_node_id AND members.assigned_ip=excluded.assigned_ip
+			THEN members.authorized ELSE 0 END,
+		zt_node_id=excluded.zt_node_id, assigned_ip=excluded.assigned_ip`, u.ID, roomID, u.ZTNodeID, ip)
+	if err == nil {
+		_, err = tx.Exec(`DELETE FROM members WHERE user_id=? AND room_id!=?`, u.ID, roomID)
+	}
+	if err == nil {
+		_, err = tx.Exec(`UPDATE users SET zt_node_id=? WHERE id=?`, u.ZTNodeID, u.ID)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		errJSON(w, 500, err.Error())
+		return false
+	}
+	for _, old := range previous {
+		if old.nodeID != "" {
+			if err := s.zt.DeauthorizeMember(old.networkID, old.nodeID); err != nil {
+				log.Printf("撤销旧成员授权失败 room=%d: %v", old.roomID, err)
+			}
+		}
+		if old.roomID != roomID {
+			var remaining int
+			if err := s.db.QueryRow(`SELECT COUNT(*) FROM members WHERE room_id=?`, old.roomID).Scan(&remaining); err == nil && remaining == 0 {
+				s.destroyRoom(old.roomID, old.networkID)
+			} else {
+				s.touchRoom(old.roomID)
+			}
+		}
 	}
 	return true
 }
@@ -772,6 +892,9 @@ func (s *Server) joinInternal(u *User, roomID int64, nwid string, seq int, w htt
 // 复核,区分"成员缺失(补授权)"与"网络缺失(需重建)",避免控制器与 DB 不一致
 // 时客户端永远卡在 REQUESTING_CONFIGURATION。
 func (s *Server) handleJoinStatus(w http.ResponseWriter, r *http.Request, u *User) {
+	// 授权期间不能被切房/离房穿插，否则旧轮询可能把已撤销的授权加回来。
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var roomID, seq int
 	var nwid, ip string
 	var ztNodeID string
@@ -779,8 +902,12 @@ func (s *Server) handleJoinStatus(w http.ResponseWriter, r *http.Request, u *Use
 	err := s.db.QueryRow(`SELECT m.room_id, m.assigned_ip, m.zt_node_id, ro.network_id, ro.seq, COALESCE(m.authorized,0)
 		FROM members m JOIN rooms ro ON ro.id=m.room_id WHERE m.user_id=?`, u.ID).
 		Scan(&roomID, &ip, &ztNodeID, &nwid, &seq, &authorized)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		okJSON(w, map[string]any{"joined": false})
+		return
+	}
+	if err != nil {
+		errJSON(w, 500, "暂时无法读取房间状态，请稍后重试")
 		return
 	}
 	if authorized == 0 {
@@ -836,34 +963,47 @@ func (s *Server) handleRoomHeartbeat(w http.ResponseWriter, r *http.Request, u *
 
 // leaveCurrent: 把用户从当前房间移出(收回授权 + 删记录)。无房间则静默。
 // 规则: 若最后一个人离开房间, 立即销毁房间！
-func (s *Server) leaveCurrent(w http.ResponseWriter, r *http.Request, u *User) {
+func (s *Server) leaveCurrent(u *User) error {
 	var roomID int64
 	var nwid, ztNodeID string
 	err := s.db.QueryRow(`SELECT m.room_id, ro.network_id, m.zt_node_id
 		FROM members m JOIN rooms ro ON ro.id=m.room_id WHERE m.user_id=?`, u.ID).
 		Scan(&roomID, &nwid, &ztNodeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
-		return
+		return err
 	}
 	if ztNodeID != "" {
-		if err := s.zt.DeauthorizeMember(nwid, ztNodeID); err != nil {
-			log.Printf("deauthorize room %s node %s: %v", nwid, ztNodeID, err)
+		if err := s.zt.DeauthorizeMember(nwid, ztNodeID); err != nil && ztStatus(err) != http.StatusNotFound {
+			return fmt.Errorf("撤销网络授权失败: %w", err)
 		}
 	}
-	_, _ = s.db.Exec(`DELETE FROM members WHERE user_id=? AND room_id=?`, u.ID, roomID)
+	if _, err := s.db.Exec(`DELETE FROM members WHERE user_id=? AND room_id=?`, u.ID, roomID); err != nil {
+		return err
+	}
 
 	// 规则 2 落地: 检查房间剩余人数，如果最后一个人离开，立即销毁房间！
 	var remaining int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM members WHERE room_id=?`, roomID).Scan(&remaining)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM members WHERE room_id=?`, roomID).Scan(&remaining); err != nil {
+		return err
+	}
 	if remaining == 0 {
 		s.destroyRoom(roomID, nwid)
 	} else {
 		s.touchRoom(roomID)
 	}
+	return nil
 }
 
 func (s *Server) handleLeaveRoom(w http.ResponseWriter, r *http.Request, u *User) {
-	s.leaveCurrent(w, r, u)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.leaveCurrent(u); err != nil {
+		errJSON(w, 502, "离开房间失败: "+err.Error())
+		return
+	}
 	okJSON(w, map[string]any{"left": true})
 }
 
@@ -990,6 +1130,8 @@ func (s *Server) handleDismissRoom(w http.ResponseWriter, r *http.Request, u *Us
 		errJSON(w, 400, "参数不合法")
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var nwid string
 	var ownerID int64
 	err := s.db.QueryRow(`SELECT network_id, owner_id FROM rooms WHERE id=?`, req.RoomID).Scan(&nwid, &ownerID)

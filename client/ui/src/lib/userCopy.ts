@@ -10,7 +10,7 @@ export const userCopy = {
       steps: ['打开「诊断」看最近事件', '重启 LANBridge', '还不行就重装'],
     },
     net_not_ready: {
-      text: '你这台机器的虚拟网卡还没建出来',
+      text: '你这台机器的虚拟网络还没就绪',
       steps: ['点「诊断」里的「重新检测」', '以管理员身份重启 LANBridge', '首次启动时请允许弹窗授权'],
     },
     planet_down: {

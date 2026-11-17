@@ -58,6 +58,33 @@ func TestParseNetStateNotReady(t *testing.T) {
 			if len(ns.Steps) == 0 {
 				t.Fatal("未就绪必须给出排查步骤")
 			}
+			if ns.UserReason == "" {
+				t.Fatal("未就绪必须给用户版原因")
+			}
+			if len(ns.UserSteps) == 0 {
+				t.Fatal("未就绪必须给用户版步骤")
+			}
+		})
+	}
+}
+
+// 用户文案必须跟随状态:等待下发配置是正常过渡态,不能说成"网卡没建出来",
+// 否则用户会去改权限/重装驱动,方向完全错了。
+func TestUserReasonFollowsStatus(t *testing.T) {
+	cases := []struct {
+		name string
+		m    map[string]any
+		want string
+	}{
+		{"等待配置", netJSON("n", "REQUESTING_CONFIGURATION", "", 0), "正在连接虚拟网络"},
+		{"PORT_ERROR", netJSON("n", "PORT_ERROR", "", 0), "虚拟网卡没能创建出来"},
+		{"授权被拒", netJSON("n", "ACCESS_DENIED", "", 0), "服务端没放行这台机器"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseNetState(tc.m).UserReason; got != tc.want {
+				t.Fatalf("用户文案 %q, 期望 %q", got, tc.want)
+			}
 		})
 	}
 }

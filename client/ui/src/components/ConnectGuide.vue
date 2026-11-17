@@ -9,25 +9,23 @@ const expanded = ref(false)
   <div class="connect-guide-wrap">
     <button class="guide-toggle-btn" @click="expanded = !expanded">
       <span class="guide-toggle-icon">{{ expanded ? '▾' : '▸' }}</span>
-      <span class="guide-toggle-title">游戏内联机指引 (文明6)</span>
+      <span class="guide-toggle-title">游戏里怎么连</span>
     </button>
 
-    <div v-show="expanded" class="guide-content">
-      <ol class="guide-steps">
-        <li v-for="(step, idx) in userCopy.guideSteps" :key="idx" class="guide-step-item">
-          <span class="step-num">{{ idx + 1 }}</span>
-          <span class="step-text">{{ step }}</span>
-        </li>
-      </ol>
-    </div>
+    <ol v-show="expanded" class="guide-steps">
+      <li v-for="(step, idx) in userCopy.guideSteps" :key="idx">
+        <span class="step-num">{{ idx + 1 }}</span>
+        <span class="step-text">{{ step }}</span>
+      </li>
+    </ol>
   </div>
 </template>
 
 <style scoped>
 .connect-guide-wrap {
   flex: none;
-  background: var(--card-subtle);
-  border: 1px solid var(--border-subtle);
+  background: var(--card);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
 }
@@ -36,13 +34,13 @@ const expanded = ref(false)
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: transparent;
   border: none;
-  padding: 8px 12px;
-  font-size: 12px;
+  padding: 5px 10px;
+  font-size: 11.5px;
   font-weight: 500;
-  color: var(--fg-muted);
+  color: var(--fg-subtle);
   cursor: pointer;
   text-align: left;
   transition: all 0.15s ease;
@@ -54,40 +52,36 @@ const expanded = ref(false)
 }
 
 .guide-toggle-icon {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--fg-faint);
-  display: inline-block;
-  width: 10px;
-}
-
-.guide-content {
-  padding: 8px 14px 12px 28px;
-  border-top: 1px solid var(--border-subtle);
+  width: 9px;
 }
 
 .guide-steps {
   list-style: none;
+  padding: 4px 10px 8px 25px;
+  border-top: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
-.guide-step-item {
+.guide-steps li {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  font-size: 12px;
+  gap: 7px;
+  font-size: 11.5px;
   color: var(--fg-muted);
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .step-num {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: var(--border);
-  color: var(--fg);
-  font-size: 10px;
+  color: var(--fg-muted);
+  font-size: 9.5px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -96,7 +90,5 @@ const expanded = ref(false)
   margin-top: 1px;
 }
 
-.step-text {
-  flex: 1;
-}
+.step-text { flex: 1; }
 </style>

@@ -1,61 +1,43 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onUnmounted, watch } from 'vue'
 import { state, showToast, isSelfMember } from '../store'
-import { fetchMembers, fetchZtPeers, pingPeer } from '../api'
-import type { Member } from '../types'
+import { fetchMembers, pingPeer } from '../api'
 import MemberRow from './MemberRow.vue'
 
 const refreshing = ref(false)
+let pollTimer: any = null
+let disposed = false
 
 const othersCount = computed(() => {
   return state.members.filter(m => !isSelfMember(m)).length
 })
 
 async function reloadMembersAndPing(manual = false) {
-  if (refreshing.value || !state.currentRoom) return
+  if (disposed || refreshing.value || !state.currentRoom) return
   refreshing.value = true
   const roomId = state.currentRoom.room_id
+  const netId = state.currentRoom.network_id
+  const revision = state.roomRevision
 
   try {
-    let list: Member[] = await fetchMembers(roomId).catch(() => [])
-    if (!list || list.length === 0) {
-      list = []
-      if (state.me) {
-        list.push({
-          user_id: state.me.id || 1,
-          name: state.me.name || '我',
-          zt_node_id: state.nodeId || '',
-          assigned_ip: state.assignedIp || '',
-          is_owner: true,
-        })
-      }
-      try {
-        const peers = await fetchZtPeers()
-        for (const p of peers || []) {
-          if (p.address && p.address !== state.nodeId && p.role === 'LEAF') {
-            list.push({
-              user_id: 0,
-              name: `玩家 (${p.address.slice(0, 6)})`,
-              zt_node_id: p.address,
-              assigned_ip: '',
-              is_owner: false,
-            })
-          }
-        }
-      } catch {}
+    const list = await fetchMembers(roomId)
+    if (disposed || revision !== state.roomRevision || state.currentRoom?.room_id !== roomId) return
+    state.membersError = ''
+    state.members = list || []
+    const keys = new Set(state.members.map(m => m.zt_node_id || m.assigned_ip))
+    for (const key of Object.keys(state.memberLatency)) {
+      if (!keys.has(key)) delete state.memberLatency[key]
     }
-    state.members = list
 
-    // 并发测速
-    const netId = state.currentRoom.network_id || ''
     const promises = state.members.map(async m => {
       if (isSelfMember(m)) return
       const key = m.zt_node_id || m.assigned_ip
       if (!key) return
       try {
         const res = await pingPeer(m.assigned_ip, m.zt_node_id, netId)
-        state.memberLatency[key] = res
+        if (!disposed && revision === state.roomRevision && state.currentRoom?.room_id === roomId) state.memberLatency[key] = res
       } catch {
+        if (disposed || revision !== state.roomRevision || state.currentRoom?.room_id !== roomId) return
         state.memberLatency[key] = {
           state: 'no_tunnel',
           state_text: '探测失败',
@@ -65,15 +47,50 @@ async function reloadMembersAndPing(manual = false) {
       }
     })
     await Promise.allSettled(promises)
-    if (manual) showToast(`成员测速已更新 (共 ${state.members.length} 人)`)
+    if (manual && revision === state.roomRevision) showToast(`成员测速已更新 (共 ${state.members.length} 人)`)
   } catch (e: any) {
-    if (manual) showToast(`刷新失败: ${e.message}`, true)
+    if (!disposed && revision === state.roomRevision) {
+      state.membersError = `成员信息获取失败：${e.message}`
+      state.members = []
+      state.memberLatency = {}
+      if (manual) showToast(state.membersError, true)
+    }
   } finally {
-    setTimeout(() => {
-      refreshing.value = false
-    }, 300)
+    refreshing.value = false
+    if (state.currentRoom && state.currentRoom.room_id !== roomId) reloadMembersAndPing()
   }
 }
+
+// 进房间即自动拉一次，之后每 15 秒刷新成员与延迟。
+// 旧实现只绑在「测速」按钮上，进房后成员表一直是空的。
+const REFRESH_INTERVAL = 15000
+
+function startPolling() {
+  stopPolling()
+  reloadMembersAndPing()
+  pollTimer = setInterval(() => reloadMembersAndPing(), REFRESH_INTERVAL)
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+watch(
+  () => state.currentRoom?.room_id,
+  id => {
+    if (id) startPolling()
+    else stopPolling()
+  },
+  { immediate: true },
+)
+
+onUnmounted(() => {
+  disposed = true
+  stopPolling()
+})
 </script>
 
 <template>
@@ -106,14 +123,15 @@ async function reloadMembersAndPing(manual = false) {
     </div>
 
     <!-- 成员表格 (内部滚动) -->
+    <p v-if="state.membersError" class="member-error" role="alert">{{ state.membersError }}，请点击测速重试。</p>
     <div class="member-table-wrap">
       <table class="member-table">
         <thead>
           <tr>
             <th>玩家</th>
-            <th style="width: 140px;">联机地址</th>
-            <th style="width: 130px;">延迟 / 状态</th>
-            <th style="width: 60px; text-align: right;">操作</th>
+            <th style="width: 130px;">联机地址</th>
+            <th style="width: 120px;">延迟 / 状态</th>
+            <th style="width: 48px; text-align: right;">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -135,6 +153,8 @@ async function reloadMembersAndPing(manual = false) {
 </template>
 
 <style scoped>
+.member-error { padding: 8px 12px; color: var(--err); }
+
 .member-list-panel {
   flex: 1;
   min-height: 0;
@@ -150,10 +170,11 @@ async function reloadMembersAndPing(manual = false) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px;
+  padding: 4px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--card-subtle);
   flex: none;
+  min-height: 30px;
 }
 
 .head-left {
@@ -163,28 +184,29 @@ async function reloadMembersAndPing(manual = false) {
 }
 
 .head-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--fg);
 }
 
 .member-count-badge {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--fg-subtle);
   background: var(--border-subtle);
-  padding: 1px 6px;
-  border-radius: 10px;
+  padding: 0 5px;
+  border-radius: 8px;
+  line-height: 15px;
 }
 
 .head-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .only-self-hint {
-  font-size: 11.5px;
-  color: var(--warn);
+  font-size: 11px;
+  color: var(--fg-faint);
 }
 
 .member-table-wrap {
@@ -196,7 +218,7 @@ async function reloadMembersAndPing(manual = false) {
 .member-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 12px;
 }
 
 .member-table thead {
@@ -208,23 +230,24 @@ async function reloadMembersAndPing(manual = false) {
 }
 
 .member-table th {
-  padding: 7px 12px;
+  padding: 4px 10px;
   font-weight: 600;
   color: var(--fg-subtle);
-  font-size: 11px;
+  font-size: 10.5px;
   text-transform: uppercase;
   text-align: left;
 }
 
 .member-table td {
-  padding: 8px 12px;
+  padding: 5px 10px;
   border-bottom: 1px solid var(--border-subtle);
   vertical-align: middle;
 }
 
 .empty-cell {
   text-align: center;
-  padding: 40px 10px;
+  padding: 28px 10px;
   color: var(--fg-faint);
+  font-size: 11.5px;
 }
 </style>

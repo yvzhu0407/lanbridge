@@ -46,6 +46,10 @@ type netState struct {
 	Ready     bool     `json:"ready"`
 	Reason    string   `json:"reason,omitempty"`
 	Steps     []string `json:"steps,omitempty"`
+	// UserReason/UserSteps 是给用户看的版本。开发版 Reason 里全是状态机名词,
+	// 直接显示到结论栏会把"正在下发配置"这种正常等待说成"网卡没建出来"。
+	UserReason string   `json:"user_reason,omitempty"`
+	UserSteps  []string `json:"user_steps,omitempty"`
 	// Rev = netconfRevision。0 表示加入后一直没拿到过服务端下发的网络配置,
 	// 自愈据此判断"该重新 join 强制再拉一次"。
 	Rev int `json:"rev"`
@@ -111,21 +115,35 @@ func parseNetState(m map[string]any) netState {
 	case ns.Status == "PORT_ERROR" || ns.PortError != 0:
 		ns.Reason = "虚拟网卡创建失败(PORT_ERROR)"
 		ns.Steps = portErrorSteps()
+		ns.UserReason = "虚拟网卡没能创建出来"
+		ns.UserSteps = []string{"点「诊断」里的「重新检测」", "以管理员身份重启 LANBridge", "首次启动时请允许弹窗授权"}
 	case ns.Status == "REQUESTING_CONFIGURATION":
 		ns.Reason = "正在等待服务端下发网络配置"
 		ns.Steps = configSteps()
+		// 这是加入房间后的正常过渡态,通常几秒内自己消失。
+		// 说成"网卡没建"会让用户以为要改权限/重装,方向完全错了。
+		ns.UserReason = "正在连接虚拟网络"
+		ns.UserSteps = []string{"稍等几秒,通常会自动连上", "超过 1 分钟仍未连上,点「诊断」里的「重新检测」", "仍不行再看诊断里的事件记录"}
 	case ns.Status == "ACCESS_DENIED":
 		ns.Reason = "服务端拒绝授权"
 		ns.Steps = deniedSteps()
+		ns.UserReason = "服务端没放行这台机器"
+		ns.UserSteps = []string{"回到大厅重新加入这个房间", "房间可能已被房主解散"}
 	case ns.Status == "OK" && ns.Device == "":
 		ns.Reason = "网络已加入但虚拟网卡未创建"
 		ns.Steps = portErrorSteps()
+		ns.UserReason = "虚拟网卡没能创建出来"
+		ns.UserSteps = []string{"以管理员身份重启 LANBridge", "首次启动时请允许弹窗授权"}
 	case ns.Status == "OK":
 		ns.Reason = "网络已加入但未拿到分配 IP"
 		ns.Steps = configSteps()
+		ns.UserReason = "还没分到联机地址"
+		ns.UserSteps = []string{"稍等几秒", "不行就退出房间后重新进入"}
 	default:
 		ns.Reason = "网络状态异常: " + ns.Status
 		ns.Steps = configSteps()
+		ns.UserReason = "虚拟网络状态异常"
+		ns.UserSteps = []string{"点「诊断」里的「重新检测」"}
 	}
 	return ns
 }
@@ -616,12 +634,19 @@ func buildHealth() healthReport {
 			anyReady = true
 			continue
 		}
+		// 用户文案跟具体状态走,不能一律说"网卡没建出来":正在等下发配置、
+		// 被服务端拒绝、没分到 IP 是三种完全不同的故障,处理方式也不同。
+		userText, userSteps := ns.UserReason, ns.UserSteps
+		if userText == "" {
+			userText = "你这台机器的虚拟网络还没就绪"
+			userSteps = []string{"点「诊断」里的「重新检测」", "重启 LANBridge"}
+		}
 		rep.Issues = append(rep.Issues, issue{
 			Code:      "net_not_ready:" + ns.NetworkID,
 			Text:      ns.Reason,
 			Steps:     ns.Steps,
-			UserText:  "你这台机器的虚拟网卡还没建出来",
-			UserSteps: []string{"点「诊断」里的「重新检测」", "以管理员身份重启 LANBridge", "首次启动时请允许弹窗授权"},
+			UserText:  userText,
+			UserSteps: userSteps,
 		})
 	}
 	if ok, lat := planetState(); ok {
@@ -660,7 +685,11 @@ func logHealth(rep healthReport) {
 		}
 		LogDev("[健康] 异常:%s", is.Text)
 		if strings.HasPrefix(is.Code, "net_not_ready:") {
-			LogUser("warn", "net_not_ready", "你这台机器的虚拟网卡没建出来")
+			text := is.UserText
+			if text == "" {
+				text = "你这台机器的虚拟网络还没就绪"
+			}
+			LogUser("warn", "net_not_ready", text)
 		}
 		for i, s := range is.Steps {
 			LogDev("[排查] %d. %s", i+1, s)

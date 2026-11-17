@@ -111,7 +111,11 @@ func TestHandleLogsDualStream(t *testing.T) {
 	content := "d|2026/11/09 10:00:00 [开发] 原始日志1\n" +
 		"u|2026-11-09T10:00:01|info|net_ready|网络就绪\n" +
 		"d|2026/11/09 10:00:02 [开发] 原始日志2\n" +
-		"u|2026-11-09T10:00:03|warn|peer_bad|连不上成员\n"
+		"u|2026-11-09T10:00:03|warn|peer_bad|连不上成员\n" +
+		// 多行 LogDev:只有首行带 d| 前缀,续行是裸文本
+		"d|2026/11/09 10:00:04 [诊断] 防火墙配置档状态:\n" +
+		"Domain=ON\n" +
+		"Private=ON\n"
 	if err := os.WriteFile(logFilePath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +141,10 @@ func TestHandleLogsDualStream(t *testing.T) {
 	devLogs := call("dev")
 	if strings.Contains(devLogs, "网络就绪") || !strings.Contains(devLogs, "原始日志1") || strings.Contains(devLogs, "d|") {
 		t.Fatalf("dev view 格式错误: %q", devLogs)
+	}
+	// 多行开发日志的续行不能丢
+	if !strings.Contains(devLogs, "Domain=ON") || !strings.Contains(devLogs, "Private=ON") {
+		t.Fatalf("dev view 丢失多行日志续行: %q", devLogs)
 	}
 
 	allLogs := call("")

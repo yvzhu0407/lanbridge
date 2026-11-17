@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { state, showToast, isSelfMember } from '../store'
+import { state, showToast, isSelfMember, askConfirm, resetRoom } from '../store'
 import { copyToClipboard } from '../lib/format'
-import { leaveRoom, dismissRoom, joinZtNetwork } from '../api'
+import { leaveRoom, dismissRoom, joinZtNetwork, inviteLink } from '../api'
 
 const isOwner = computed(() => {
   if (!state.currentRoom || !state.me) return false
@@ -10,68 +10,59 @@ const isOwner = computed(() => {
   if (r && r.owner_id && state.me.id) {
     return r.owner_id === state.me.id
   }
-  return state.me.room_id === state.currentRoom.room_id
+  return state.members.some(m => isSelfMember(m) && m.is_owner === true)
 })
 
-const myIp = computed(() => {
-  return state.assignedIp || state.currentRoom?.ip || ''
+const myIp = computed(() => state.joined ? state.assignedIp : '')
+
+const roomLabel = computed(() => {
+  const name = state.currentRoom?.name
+  if (name) return name
+  const id = state.currentRoom?.room_id
+  return id ? `房间 #${id}` : ''
 })
 
-const summaryState = computed(() => {
-  // 1. 本机网络未就绪判定
-  const health = state.health
-  const net = health?.networks?.find(n => n.network_id === state.currentRoom?.network_id)
-  if (!health || (net && !net.ready) || (!state.assignedIp && !state.joined)) {
+// 一句话结论：这是整个房间页最重要的信息，其余都是它的注脚
+const net = computed(() => state.health?.networks?.find(n => n.network_id === state.currentRoom?.network_id))
+
+const verdict = computed(() => {
+  const n = net.value
+  if (!state.health || !state.health.node_ready) {
+    return { status: 'err' as const, text: state.healthError ? '连接状态未知' : '联机引擎未就绪', hint: '打开诊断查看' }
+  }
+  if (!state.joined || !n?.ready) {
+    const pending = !n || n.status === 'REQUESTING_CONFIGURATION' || (n.status === 'OK' && !n.ready)
     return {
-      status: 'err' as const,
-      title: '你这台机器没连上',
-      hint: net?.reason || '虚拟网卡未建出或尚未分配到 IP，请查看右上角「诊断」',
+      status: pending ? 'faint' as const : 'err' as const,
+      text: pending ? '正在连接虚拟网络' : '这台机器没连上',
+      hint: n?.user_reason || '正在等待网络就绪',
     }
   }
-
-  // 2. 成员探测统计
-  const otherMembers = state.members.filter(m => !isSelfMember(m))
-  if (otherMembers.length === 0) {
-    return {
-      status: 'ok' as const,
-      title: '可以联机',
-      hint: '当前房间仅有你一人，把联机地址发给好友即可加入对局',
-    }
+  if (state.roomError || state.membersError) {
+    return { status: 'warn' as const, text: '本机网络已就绪', hint: '房间信息同步异常' }
   }
 
-  let reachableCount = 0
-  let pendingCount = 0
-  for (const m of otherMembers) {
-    const key = m.zt_node_id || m.assigned_ip
-    const probe = state.memberLatency[key]
-    if (probe === undefined || probe === null) {
-      pendingCount++
-    } else if (probe.reachable && probe.latency >= 0) {
-      reachableCount++
-    }
+  const others = state.members.filter(m => !isSelfMember(m))
+  if (others.length === 0) {
+    return { status: 'ok' as const, text: '本机网络已就绪', hint: '点击邀请，让朋友加入房间' }
   }
 
-  if (pendingCount === otherMembers.length) {
-    return {
-      status: 'faint' as const,
-      title: '正在检测…',
-      hint: '正在探测各成员网络延迟与连通状态',
-    }
+  let reachable = 0
+  let pending = 0
+  for (const m of others) {
+    const p = state.memberLatency[m.zt_node_id || m.assigned_ip]
+    if (p === undefined || p === null) pending++
+    else if (p.reachable && p.latency >= 0) reachable++
   }
 
-  if (reachableCount === otherMembers.length) {
-    return {
-      status: 'ok' as const,
-      title: `可以联机 · 全部成员可达 (${reachableCount + 1}/${otherMembers.length + 1}人)`,
-      hint: '虚拟网络与数据通道畅通，可以直接开始游戏',
-    }
+  const total = others.length + 1
+  if (pending === others.length) {
+    return { status: 'faint' as const, text: '正在检测…', hint: '' }
   }
-
-  return {
-    status: 'warn' as const,
-    title: `部分成员可达 · ${reachableCount + 1}/${otherMembers.length + 1} 人可达`,
-    hint: '部分成员尚未完成链路连接，可点击该成员查看排查建议',
+  if (reachable === others.length) {
+    return { status: 'ok' as const, text: '成员网络互通', hint: `${reachable + 1}/${total} 人可达` }
   }
+  return { status: 'warn' as const, text: '部分人连不上', hint: `${reachable + 1}/${total} 人可达` }
 })
 
 async function copyIp() {
@@ -80,197 +71,219 @@ async function copyIp() {
     return
   }
   const ok = await copyToClipboard(myIp.value)
-  showToast(ok ? '已复制联机 IP 到剪贴板' : '复制失败', !ok)
+  showToast(ok ? '已复制联机地址' : '复制失败', !ok)
 }
 
-async function copyNwid() {
-  const nwid = state.currentRoom?.network_id
-  if (!nwid) return
-  const ok = await copyToClipboard(nwid)
-  showToast(ok ? '已复制虚拟网络 ID' : '复制失败', !ok)
+function toggleChat() {
+  state.chatOpen = !state.chatOpen
 }
 
-async function handleLeave() {
-  if (!confirm('确定离开当前房间？')) return
+// 复制邀请链接。房间名要和链接写在一起：对方可能只截走其中一行，
+// 光有 lanbridge://join/81 看不出这是什么房间。
+// 房间号单独留一行，聊天软件吞掉自定义协议时还能手抄加入。
+async function copyInvite() {
+  const id = state.currentRoom?.room_id
+  if (!id) return
+  const name = state.currentRoom?.name || `房间 #${id}`
+  const text = [
+    `来和我联机：${name}`,
+    `${inviteLink(id)}（房间号 ${id} · ${name}）`,
+  ].join('\n')
+  const ok = await copyToClipboard(text)
+  showToast(ok ? '邀请已复制，发给朋友即可加入' : '复制失败', !ok)
+}
+
+async function leaveOrDismiss(dismiss: boolean) {
+  if (state.roomBusy || !state.currentRoom) return
+  state.roomBusy = true
+  state.roomRevision++
   try {
-    await leaveRoom()
-    await joinZtNetwork('', 'all')
-  } catch {}
-  state.currentRoom = null
-  state.joined = false
-  state.assignedIp = ''
-  state.currentView = 'lobby'
-  showToast('已离开房间')
-}
-
-async function handleDismiss() {
-  if (!state.currentRoom) return
-  if (!confirm('解散房间将销毁虚拟网络，所有成员都将断开。确认解散？')) return
-  try {
-    await dismissRoom(state.currentRoom.room_id)
-    await joinZtNetwork('', 'all')
-    state.currentRoom = null
+    const ok = await askConfirm(dismiss ? {
+      title: '解散这个房间？',
+      detail: '解散会销毁虚拟网络，房间内所有成员都会断开。',
+      confirmText: '解散', danger: true,
+    } : {
+      title: '离开当前房间？',
+      detail: '离开后需要在大厅重新加入才能继续联机。',
+      confirmText: '离开',
+    })
+    if (!ok) return
+    if (dismiss) await dismissRoom(state.currentRoom.room_id)
+    else await leaveRoom()
+    state.currentRoom.authorized = false
     state.joined = false
     state.assignedIp = ''
-    state.currentView = 'lobby'
-    showToast('房间已解散')
+    try {
+      await joinZtNetwork('', 'all')
+    } catch (e: any) {
+      state.roomError = `已退出房间，本地网络清理未完成，将自动重试：${e.message}`
+      showToast(state.roomError, true)
+      return
+    }
+    resetRoom()
+    showToast(dismiss ? '房间已解散' : '已离开房间')
   } catch (e: any) {
-    showToast(e.message, true)
+    showToast(`${dismiss ? '解散' : '离开'}失败：${e.message}`, true)
+  } finally {
+    state.roomBusy = false
+    state.roomPollDue = 0
   }
 }
+
+const handleLeave = () => leaveOrDismiss(false)
+const handleDismiss = () => leaveOrDismiss(true)
+
 </script>
 
 <template>
-  <div class="room-summary-card">
-    <div class="summary-top">
-      <div class="summary-conclusion">
-        <div class="conclusion-badge" :class="`badge-${summaryState.status}`">
-          <span class="dot" :class="`dot-${summaryState.status}`"></span>
-          <span class="conclusion-title">{{ summaryState.title }}</span>
-        </div>
-        <div class="conclusion-hint">{{ summaryState.hint }}</div>
-      </div>
-
-      <div class="summary-actions">
-        <button
-          v-if="isOwner"
-          class="btn btn-sm btn-danger"
-          @click="handleDismiss"
-        >
-          解散房间
-        </button>
-        <button
-          class="btn btn-sm btn-ghost"
-          @click="handleLeave"
-        >
-          离开房间
-        </button>
-      </div>
+  <div class="summary-bar">
+    <!-- 左：结论 -->
+    <div class="verdict" :class="`v-${verdict.status}`" :title="verdict.hint">
+      <span class="dot" :class="`dot-${verdict.status}`"></span>
+      <span class="verdict-text">{{ verdict.text }}</span>
+      <span v-if="verdict.hint" class="verdict-hint">{{ verdict.hint }}</span>
     </div>
 
-    <div class="summary-meta-row">
-      <div class="meta-item ip-item">
-        <span class="meta-label">你的联机地址:</span>
-        <span class="meta-value mono ip-value">{{ myIp || '正在获取…' }}</span>
-        <button
-          class="btn btn-sm"
-          :disabled="!myIp"
-          @click="copyIp"
-        >
-          复制地址
-        </button>
-      </div>
+    <!-- 中：我的联机地址（核心操作） -->
+    <button class="ip-chip" :disabled="!myIp" title="这是我在这台机器上的联机地址，点击复制" @click="copyIp">
+      <span class="ip-label">我的地址</span>
+      <span class="mono ip-text">{{ myIp || '分配中…' }}</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+    </button>
 
-      <div class="meta-item">
-        <span class="meta-label">房间:</span>
-        <span class="meta-value">{{ state.currentRoom?.name || `#${state.currentRoom?.room_id}` }}</span>
-      </div>
-
-      <div class="meta-item">
-        <span class="meta-label">网络 ID:</span>
-        <span
-          class="meta-value mono link-value"
-          @click="copyNwid"
-          title="点击复制网络 ID"
-        >
-          {{ state.currentRoom?.network_id }}
-        </span>
-      </div>
+    <!-- 右：房间标识 + 操作 -->
+    <div class="actions">
+      <span v-if="roomLabel" class="room-label">{{ roomLabel }}</span>
+      <span v-if="state.currentRoom?.room_id" class="room-id mono">#{{ state.currentRoom.room_id }}</span>
+      <button class="btn btn-sm btn-ghost" @click="copyInvite">邀请</button>
+      <button class="btn btn-sm btn-ghost" @click="toggleChat">
+        聊天
+        <span v-if="!state.chatOpen && state.chatUnread > 0" class="unread-dot">{{ state.chatUnread }}</span>
+      </button>
+      <button v-if="isOwner" class="btn btn-sm btn-ghost danger" :disabled="state.roomBusy" @click="handleDismiss">解散</button>
+      <button class="btn btn-sm btn-ghost" :disabled="state.roomBusy" @click="handleLeave">离开</button>
     </div>
   </div>
 </template>
 
 <style scoped>
-.room-summary-card {
+.summary-bar {
   flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  padding: 6px 10px;
+  min-height: 38px;
 }
 
-.summary-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.summary-conclusion {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.conclusion-badge {
+.verdict {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13.5px;
+  gap: 6px;
+  font-size: 12.5px;
   font-weight: 600;
-  padding: 4px 10px;
-  border-radius: var(--radius);
-  width: fit-content;
-}
-
-.conclusion-title {
-  letter-spacing: -0.2px;
-}
-
-.conclusion-hint {
-  font-size: 11.5px;
-  color: var(--fg-subtle);
-  padding-left: 2px;
-}
-
-.summary-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   flex: none;
 }
 
-.summary-meta-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 18px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-subtle);
+.verdict-text { letter-spacing: -0.2px; }
+.v-ok .verdict-text { color: var(--ok); }
+.v-warn .verdict-text { color: var(--warn); }
+.v-err .verdict-text { color: var(--err); }
+.v-faint .verdict-text { color: var(--fg-subtle); }
+
+.verdict-hint {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--fg-faint);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.meta-item {
-  display: flex;
+.ip-chip {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-}
-
-.meta-label {
-  color: var(--fg-subtle);
-}
-
-.meta-value {
-  color: var(--fg);
-  font-weight: 500;
-}
-
-.ip-value {
-  color: var(--accent);
-  font-weight: 700;
-  font-size: 13px;
-}
-
-.link-value {
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  padding: 3px 8px;
   cursor: pointer;
-  color: var(--fg-muted);
+  color: var(--accent);
+  transition: all 0.15s ease;
 }
 
-.link-value:hover {
-  color: var(--accent);
-  text-decoration: underline;
+.ip-chip:hover:not(:disabled) {
+  background: var(--card);
+}
+
+.ip-label {
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  font-weight: 500;
+  padding-right: 5px;
+  border-right: 1px solid var(--accent-border);
+}
+
+.ip-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ip-text {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+
+.actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.room-label {
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 房间号：同房间的人靠这个对上号，比网络 hash 好认得多 */
+.room-id {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  background: var(--card-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-right: 4px;
+}
+
+.danger { color: var(--err); }
+.danger:hover:not(:disabled) { background: var(--err-subtle); }
+
+.unread-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--warn);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
 }
 </style>

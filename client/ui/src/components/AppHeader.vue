@@ -4,16 +4,11 @@ import { state, showToast } from '../store'
 import { copyToClipboard } from '../lib/format'
 
 const hasIssues = computed(() => {
-  return (state.health?.issues && state.health.issues.length > 0) || false
+  return !!state.healthError || !!(state.health && !state.health.node_ready) || (state.health?.issues.length || 0) > 0
 })
 
 const isRecovering = computed(() => {
   return state.health?.recovering || false
-})
-
-const nodeShort = computed(() => {
-  if (!state.nodeId) return '离线'
-  return `${state.nodeId.slice(0, 8)}…`
 })
 
 async function copyNodeId() {
@@ -68,7 +63,8 @@ function handleBrandClick() {
     </div>
 
     <div class="header-right">
-      <div class="node-pill" @click="copyNodeId" title="点击复制 Node ID">
+      <!-- 只保留健康的指示灯：Node ID 是内部标识，用户不需要看到 -->
+      <div class="node-pill" @click="copyNodeId" title="联机引擎状态（点击复制诊断用的节点 ID）">
         <span
           class="dot"
           :class="{
@@ -77,7 +73,7 @@ function handleBrandClick() {
             'dot-err': !state.nodeId || hasIssues
           }"
         ></span>
-        <span class="mono">{{ state.nodeId ? `Node: ${nodeShort}` : 'ZeroTier 离线' }}</span>
+        <span>{{ isRecovering ? '联机引擎恢复中' : state.healthError ? '引擎状态未知' : !state.health ? '正在检测引擎' : hasIssues ? '联机引擎需检查' : state.nodeId ? '联机引擎正常' : '联机引擎未就绪' }}</span>
       </div>
 
       <div class="header-divider"></div>
@@ -106,21 +102,21 @@ function handleBrandClick() {
 
 <style scoped>
 .app-header {
-  height: 44px;
+  height: 38px;
   flex: none;
   background: var(--card);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 12px;
   z-index: 20;
 }
 
 .header-left, .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .brand-btn {
@@ -131,8 +127,8 @@ function handleBrandClick() {
 }
 
 .brand-icon {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border-radius: 5px;
   background: linear-gradient(135deg, #1e3a8a, #2563eb);
   display: flex;
@@ -144,7 +140,7 @@ function handleBrandClick() {
 
 .brand-text {
   font-weight: 700;
-  font-size: 13.5px;
+  font-size: 12.5px;
   letter-spacing: -0.2px;
   color: var(--fg);
 }
@@ -165,7 +161,7 @@ function handleBrandClick() {
   color: var(--fg-subtle);
   font-size: 12px;
   font-weight: 500;
-  padding: 3px 12px;
+  padding: 2px 10px;
   border-radius: 4px;
   cursor: pointer;
   display: inline-flex;
@@ -199,8 +195,8 @@ function handleBrandClick() {
   background: var(--card-subtle);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 3px 8px;
-  font-size: 11.5px;
+  padding: 2px 7px;
+  font-size: 11px;
   color: var(--fg-subtle);
   cursor: pointer;
   transition: all 0.15s ease;
@@ -213,7 +209,7 @@ function handleBrandClick() {
 
 .header-divider {
   width: 1px;
-  height: 16px;
+  height: 14px;
   background: var(--border);
 }
 
@@ -225,8 +221,8 @@ function handleBrandClick() {
   border: none;
   background: transparent;
   color: var(--fg-subtle);
-  font-size: 12px;
-  padding: 4px 8px;
+  font-size: 11.5px;
+  padding: 3px 7px;
   border-radius: var(--radius);
   cursor: pointer;
   position: relative;
@@ -254,10 +250,10 @@ function handleBrandClick() {
 
 .user-pill {
   cursor: pointer;
-  padding: 3px 8px;
+  padding: 2px 7px;
   border-radius: var(--radius);
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: 11.5px;
   background: var(--card-subtle);
   border: 1px solid var(--border);
   transition: all 0.15s ease;

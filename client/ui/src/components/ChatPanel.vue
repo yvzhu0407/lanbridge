@@ -4,7 +4,6 @@ import { state, showToast, isSelfMember } from '../store'
 import type { ChatMessage, Member } from '../types'
 import { userCopy } from '../lib/userCopy'
 
-const expanded = ref(false)
 const inputMessage = ref('')
 const sending = ref(false)
 const msgListEl = ref<HTMLElement | null>(null)
@@ -12,7 +11,16 @@ const msgListEl = ref<HTMLElement | null>(null)
 const messages = ref<ChatMessage[]>([])
 const renderedIds = new Set<string>()
 const delivery = ref<Record<string, string>>({})
-const unreadCount = ref(0)
+
+// 聊天开关与未读数放在 store：结论栏上的「聊天」按钮要读写它们
+const expanded = computed({
+  get: () => state.chatOpen,
+  set: v => { state.chatOpen = v },
+})
+const unreadCount = computed({
+  get: () => state.chatUnread,
+  set: v => { state.chatUnread = v },
+})
 
 // Peer health: ip -> { ok, failedAt, failCount }
 const peerHealth = new Map<string, { ok: boolean; failedAt: number; failCount: number }>()
@@ -22,7 +30,29 @@ const PEER_BACKOFF = 30000
 let pollTimer: any = null
 let isPolling = false
 
-const isReady = computed(() => !!(state.joined && state.currentRoom && state.assignedIp))
+// 聊天走 8890 局域网直连，服务端只放行 Status=OK 的网络。
+// 所以这里必须把「网络就绪」也算进可用性，否则会一直 403 而界面毫无解释。
+const netState = computed(() => {
+  const id = state.currentRoom?.network_id
+  if (!id) return null
+  return (state.health?.networks || []).find(n => n.network_id === id) || null
+})
+
+const isReady = computed(() => {
+  return !!(state.joined && state.currentRoom && state.assignedIp && netState.value?.ready)
+})
+
+// 不可用时给用户一句人话，而不是空列表。
+// 必须保证任何 !isReady 的分支都有文案，否则会出现「暂时不能聊天：」后面空一片。
+const blockReason = computed(() => {
+  if (!state.currentRoom) return '还没进入房间'
+  const net = netState.value
+  if (net && !net.ready) return net.user_reason || net.reason || '虚拟网络状态异常'
+  if (!state.assignedIp) return '虚拟网络还没分到联机地址'
+  if (!net) return '虚拟网络还没建好'
+  if (!state.joined) return '正在等服务器确认房间权限'
+  return '虚拟网络还在就绪中'
+})
 
 function chatPeers(): Member[] {
   return state.members.filter(m => !isSelfMember(m) && m.assigned_ip)
@@ -63,7 +93,8 @@ async function fetchWithTimeout(url: string, opts: RequestInit = {}): Promise<an
 }
 
 async function pollMessages() {
-  if (isPolling || !state.currentRoom) return
+  // 网络没就绪时服务端必然 403，轮询只是刷错误，直接跳过
+  if (isPolling || !state.currentRoom || !isReady.value) return
   isPolling = true
   try {
     const net = encodeURIComponent(state.currentRoom.network_id || '')
@@ -194,10 +225,6 @@ async function handleSend() {
 
 function toggleExpand() {
   expanded.value = !expanded.value
-  if (expanded.value) {
-    unreadCount.value = 0
-    scrollToBottom()
-  }
 }
 
 watch(expanded, val => {
@@ -218,37 +245,22 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="chat-container" :class="{ expanded }">
-    <!-- 收起态：44px 高度条 -->
-    <div v-if="!expanded" class="chat-collapsed-bar" @click="toggleExpand">
-      <div class="bar-left">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-        </svg>
-        <span class="chat-bar-title">房间聊天</span>
-        <span v-if="unreadCount > 0" class="badge badge-warn unread-badge">
-          {{ unreadCount }} 条未读
-        </span>
-      </div>
-      <span class="expand-hint">点击展开 ▸</span>
-    </div>
-
-    <!-- 展开态：满高聊天面板 -->
-    <div v-else class="chat-expanded-panel">
+  <!-- 聊天不常驻：默认隐藏，由结论栏的「聊天」按钮开关 -->
+  <div v-if="expanded" class="chat-overlay">
+    <div class="chat-panel">
       <div class="chat-header">
-        <div class="chat-header-title">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-          </svg>
-          <span>房间聊天</span>
-          <span class="online-peers-hint mono">{{ chatPeers().length }} 人在线</span>
-        </div>
-        <button class="btn btn-sm btn-ghost" @click="toggleExpand" title="收起聊天">
-          收起 ▾
-        </button>
+        <span class="chat-title">房间聊天</span>
+        <span class="online-peers mono">{{ chatPeers().length }} 人在线</span>
+        <button class="btn btn-sm btn-ghost close-btn" title="收起聊天" @click="toggleExpand">✕</button>
       </div>
 
-      <!-- 消息列表 (内部滚动) -->
+      <!-- 网络未就绪：聊天服务会拒绝所有请求，必须先说明原因 -->
+      <div v-if="!isReady" class="chat-blocked">
+        <span class="blocked-icon">!</span>
+        <span class="blocked-text">暂时不能聊天：{{ blockReason }}</span>
+        <span class="blocked-hint">网络连通后会自动可用</span>
+      </div>
+
       <div ref="msgListEl" class="chat-msg-list">
         <div
           v-for="m in messages"
@@ -258,17 +270,13 @@ onUnmounted(() => {
         >
           <div class="msg-sender">{{ m.name }}</div>
           <div class="msg-bubble">{{ m.text }}</div>
-          <div v-if="delivery[m.id]" class="msg-delivery">
-            {{ delivery[m.id] }}
-          </div>
+          <div v-if="delivery[m.id]" class="msg-delivery">{{ delivery[m.id] }}</div>
         </div>
-
         <div v-if="messages.length === 0" class="empty-chat">
-          暂无聊天消息
+          {{ isReady ? '还没有消息' : '网络通了才能收发消息' }}
         </div>
       </div>
 
-      <!-- 发送框 -->
       <div class="chat-footer">
         <input
           v-model="inputMessage"
@@ -291,105 +299,119 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.chat-container {
+/* 右侧浮层：盖住右半边，不挤压成员表 */
+.chat-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
   width: 300px;
-  flex: none;
+  z-index: 30;
   display: flex;
-  flex-direction: column;
+  padding: 10px 12px 10px 0;
+  animation: chat-in 0.16s ease-out;
 }
 
-.chat-collapsed-bar {
-  height: 44px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  transition: all 0.15s ease;
+@keyframes chat-in {
+  from { transform: translateX(12px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
 }
 
-.chat-collapsed-bar:hover {
-  background: var(--card-hover);
-  border-color: var(--accent);
-}
-
-.bar-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--fg);
-}
-
-.chat-bar-title {
-  font-weight: 600;
-  font-size: 12.5px;
-}
-
-.unread-badge {
-  font-size: 10.5px;
-  padding: 1px 5px;
-}
-
-.expand-hint {
-  font-size: 11.5px;
-  color: var(--fg-subtle);
-}
-
-.chat-expanded-panel {
+.chat-panel {
   flex: 1;
   min-height: 0;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  box-shadow: -6px 0 20px rgba(15, 23, 42, 0.10);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
 .chat-header {
-  height: 42px;
-  padding: 0 12px;
+  height: 32px;
+  padding: 0 8px 0 10px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   border-bottom: 1px solid var(--border);
   background: var(--card-subtle);
   flex: none;
 }
 
-.chat-header-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.chat-title {
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--fg);
 }
 
-.online-peers-hint {
+.online-peers {
+  font-size: 10.5px;
+  color: var(--fg-faint);
+}
+
+.chat-blocked {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--warn-subtle);
+  border-bottom: 1px solid var(--border);
   font-size: 11px;
-  color: var(--fg-subtle);
-  margin-left: 4px;
+  color: var(--warn);
+  line-height: 1.4;
+}
+
+.blocked-icon {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--warn);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.blocked-text {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.blocked-hint {
+  flex: none;
+  color: var(--fg-faint);
+  font-size: 10.5px;
+}
+
+.close-btn {
+  margin-left: auto;
+  padding: 1px 5px;
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .chat-msg-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .chat-msg-row {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  max-width: 85%;
+  max-width: 88%;
 }
 
 .chat-msg-row.from-self {
@@ -398,18 +420,18 @@ onUnmounted(() => {
 }
 
 .msg-sender {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--fg-faint);
-  margin-bottom: 2px;
-  padding: 0 4px;
+  margin-bottom: 1px;
+  padding: 0 3px;
 }
 
 .msg-bubble {
   background: var(--card-subtle);
   color: var(--fg);
-  padding: 6px 10px;
-  border-radius: 8px;
-  font-size: 12.5px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  font-size: 12px;
   line-height: 1.45;
   word-break: break-word;
   border: 1px solid var(--border-subtle);
@@ -422,30 +444,30 @@ onUnmounted(() => {
 }
 
 .msg-delivery {
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--fg-subtle);
-  margin-top: 2px;
-  padding: 0 4px;
+  margin-top: 1px;
+  padding: 0 3px;
 }
 
 .empty-chat {
   text-align: center;
   color: var(--fg-faint);
-  font-size: 11.5px;
+  font-size: 11px;
   margin: auto;
 }
 
 .chat-footer {
-  padding: 8px 10px;
+  padding: 6px 8px;
   border-top: 1px solid var(--border);
   display: flex;
-  gap: 6px;
+  gap: 5px;
   background: var(--card);
   flex: none;
 }
 
 .chat-input {
   font-size: 12px;
-  padding: 5px 8px;
+  padding: 4px 8px;
 }
 </style>

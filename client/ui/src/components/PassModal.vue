@@ -1,36 +1,32 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { state, showToast } from '../store'
-import { joinRoom, joinZtNetwork } from '../api'
+import { state } from '../store'
+import { joinRoomFlow } from '../lib/join'
 
 const password = ref('')
 const submitting = ref(false)
 
 async function handleConfirm() {
+  if (submitting.value || state.roomBusy) return
   const roomId = state.pendingJoinRoomId
   if (!roomId) return
-  if (!state.nodeId) {
-    showToast('ZeroTier 本地节点尚未就绪', true)
-    return
-  }
 
   submitting.value = true
   try {
-    const res = await joinRoom(roomId, password.value, state.nodeId)
-    await joinZtNetwork(res.network_id)
-    state.passModalOpen = false
-    password.value = ''
-    state.pendingJoinRoomId = null
-    state.currentView = 'room'
-    showToast('已加入房间，正在建立网络连接')
-  } catch (e: any) {
-    showToast(e.message, true)
+    // 失败时保留弹窗，让用户改密码重试（密码错是这里最常见的情况）
+    const ok = await joinRoomFlow(roomId, password.value)
+    if (ok) {
+      state.passModalOpen = false
+      password.value = ''
+      state.pendingJoinRoomId = null
+    }
   } finally {
     submitting.value = false
   }
 }
 
 function handleClose() {
+  if (submitting.value) return
   state.passModalOpen = false
   password.value = ''
   state.pendingJoinRoomId = null
@@ -64,7 +60,7 @@ function handleClose() {
 
         <div class="modal-actions">
           <button type="button" class="btn" @click="handleClose">取消</button>
-          <button type="submit" class="btn btn-primary" :disabled="submitting">
+          <button type="submit" class="btn btn-primary" :disabled="submitting || state.roomBusy">
             {{ submitting ? '验证中…' : '加入' }}
           </button>
         </div>

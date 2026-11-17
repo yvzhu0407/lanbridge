@@ -27,6 +27,50 @@ func testServer(t *testing.T) *Server {
 	return &Server{db: db}
 }
 
+// 网络 ID 序号必须单调递增, 永不复用。
+//
+// 回归点: 以前网络 ID 由 seq 拼成, 而 seq 会在房间销毁后复用。销毁房间会删掉
+// 控制器上的网络, 于是新房间拿到同一个网络 ID 却指向一个不存在的网络,
+// 客户端一直是 ACCESS_DENIED, 服务端还因为 authorized=1 不肯补授权。
+func TestNetSeqNeverReused(t *testing.T) {
+	s := testServer(t)
+
+	// 历史关闭房间: seq 会被复用, 但 net_seq 必须继续往上走
+	for i := 0; i < 3; i++ {
+		if _, err := s.db.Exec(`INSERT INTO rooms(seq, net_seq, network_id, game, name, owner_id, closed)
+			VALUES(1,?,?,?,?,1,1)`, 10+i, fmt.Sprintf("net%d", 10+i), "g", "r"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 重新迁移一次, 模拟"历史行在计数器初始化之后出现"的升级场景
+	if err := migrate(s.db); err != nil {
+		t.Fatal(err)
+	}
+
+	first := nextNetSeq(t, s)
+	if first <= 12 {
+		t.Fatalf("网络序号应从历史最大值续: got %d, want >12", first)
+	}
+
+	// 计数器不依赖历史行: 删掉全部历史房间, 序号也不能回退
+	if _, err := s.db.Exec(`DELETE FROM rooms`); err != nil {
+		t.Fatal(err)
+	}
+	if second := nextNetSeq(t, s); second != first+1 {
+		t.Fatalf("删除历史行后序号回退了: got %d, want %d", second, first+1)
+	}
+}
+
+// nextNetSeq 包一层, 让测试拿到更友好的失败信息。
+func nextNetSeq(t *testing.T, s *Server) int {
+	t.Helper()
+	n, err := allocNetSeq(s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func TestJoinAllocatesFreeAddress(t *testing.T) {
 	s := testServer(t)
 	join := func(id int64) {

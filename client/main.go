@@ -25,12 +25,93 @@ import (
 var staticFS embed.FS
 
 var (
-	listenAddr = envOr("LANBRIDGE_CLIENT_ADDR", "127.0.0.1:8899")
-	serverBase = strings.TrimRight(envOr("LANBRIDGE_SERVER", "http://172.252.125.40:8800"), "/")
-	homeDir    string // ~/.lanbridge
-	ztStartErr string // ZT 实例自动启动失败原因(给 UI 展示)
-	ztStartMu  sync.Mutex
+	listenAddr       = envOr("LANBRIDGE_CLIENT_ADDR", "127.0.0.1:8899")
+	serverBase       = strings.TrimRight(envOr("LANBRIDGE_SERVER", "http://172.252.125.40:8800"), "/")
+	homeDir          string // ~/.lanbridge
+	ztStartErr       string // ZT 实例自动启动失败原因(给 UI 展示)
+	ztStartMu        sync.Mutex
+	roomNetworkMu    sync.Mutex
+	remoteHTTPClient = &http.Client{Timeout: 30 * time.Second}
+	// 上次修复"不健康实例"的时刻(ztStartMu 保护)。修复会杀实例,有破坏性,
+	// 必须节流,否则 UI 两秒一次的轮询会把实例反复杀掉。
+	ztRepairLast time.Time
 )
+
+// ztRepairCooldown 不健康实例修复的最小间隔。
+const ztRepairCooldown = 2 * time.Minute
+
+// ztUnhealthyReason 判断"实例活着但不健康":控制端口有应答,但存在建卡失败
+// (PORT_ERROR)的网络。首次安装时驱动装失败/没 settle,zt-node 会一直带着
+// PORT_ERROR 跑,而旧逻辑见 ztRunning()==true 就全部短路,没人管——用户只能
+// 反复重启 exe 撞运气。这里现场查一次 listnetworks(绕过缓存,误判会把健康
+// 实例杀掉),只挑 PORT_ERROR,别的状态有各自的自愈路径,不归这里管。
+func ztUnhealthyReason() string {
+	out, err := ztRun("-j", "listnetworks")
+	if err != nil {
+		return "" // 实例其实没应答,交给正常拉起路径
+	}
+	if portErrorInList(out) {
+		return "虚拟网卡创建失败(PORT_ERROR)"
+	}
+	return ""
+}
+
+// portErrorInList 判断 listnetworks 输出里是否有建卡失败的网络(纯函数,便于单测)。
+func portErrorInList(out string) bool {
+	var nets []map[string]any
+	if json.Unmarshal([]byte(out), &nets) != nil {
+		return false
+	}
+	for _, n := range nets {
+		if mapStr(n, "status") == "PORT_ERROR" || mapInt(n, "portError") != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// 不健康修复的外部动作缝,便于在不真杀进程的前提下单测(惯例见 supervise.go)。
+var (
+	repairInstallDriver = installDriver
+	repairKillDaemon    = killZTDaemon
+)
+
+// maybeRepairUnhealthy 修复不健康实例:补装驱动(幂等,已装则无操作)→ 杀掉
+// 实例 → 等端口释放。返回 false 表示处于冷却期,本次没修。
+// 刻意不在这里重新拉起:外层 ensureZTReady 会继续走正常的启动+等待流程,
+// 也避免 restartZTDaemon 回调本函数造成 ztStartMu 重入死锁。
+func maybeRepairUnhealthy(reason string) bool {
+	if !ztRepairLast.IsZero() && time.Since(ztRepairLast) < ztRepairCooldown {
+		LogDev("[自愈] 实例不健康(%s),距上次修复不足 %s,暂不再杀实例", reason, ztRepairCooldown)
+		return false
+	}
+	ztRepairLast = time.Now()
+	LogUser("warn", "self_heal", "检测到虚拟网卡异常，正在自动修复")
+	LogDev("[自愈] 实例不健康(%s):补装驱动并重启实例", reason)
+	if err := repairInstallDriver(); err != nil {
+		LogDev("[自愈] 补装驱动失败(继续重启实例试试): %v", err)
+	}
+	if err := repairKillDaemon(); err != nil {
+		LogDev("[自愈] 停止实例失败: %v", err)
+		return false
+	}
+	return true
+}
+
+// killZTDaemon 只杀实例不拉起:等控制端口释放,交给调用方重新启动。
+func killZTDaemon() error {
+	switch runtime.GOOS {
+	case "windows":
+		_, _ = hideCmd("taskkill", "/F", "/IM", "zt-node.exe").CombinedOutput()
+	case "darwin":
+		_, _ = hideCmd("pkill", "-f", filepath.Join(ztRuntimeDir(), "zt-node")).CombinedOutput()
+	}
+	// 等控制端口释放,否则新实例会因端口占用而起不来。
+	for i := 0; i < 30 && ztDaemonListening(); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
+}
 
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
@@ -79,6 +160,7 @@ func main() {
 		LogDev("警告: 日志无法写入磁盘,仅输出到控制台 — %s", loggingHint())
 	}
 	LogDev("=== lanbridge 客户端启动 (pid %d) ===", os.Getpid())
+	markSessionStart()
 	// Windows: 检查管理员权限,需要时弹 UAC 提权(macOS 此函数为空)
 	if checkElevation() {
 		// 提权成功,新的管理员进程已启动,当前进程退出
@@ -105,6 +187,7 @@ func main() {
 	mux.HandleFunc("GET /api/config", handleConfig)
 	mux.HandleFunc("POST /api/login", proxyNoAuth)
 	mux.HandleFunc("POST /api/register", proxyNoAuth)
+	mux.HandleFunc("POST /api/logout", handleLogout)
 	mux.HandleFunc("GET /api/planet", proxyNoAuth)
 
 	// 需要鉴权的远端接口:一律转发,自动带 token
@@ -125,6 +208,15 @@ func main() {
 	mux.HandleFunc("GET /api/logs", handleLogs)
 	mux.HandleFunc("POST /api/zt/join", handleZTJoin)
 
+	// 关窗退出：原生层拦下关闭后，由界面确认再走这里
+	mux.HandleFunc("POST /api/app/quit", handleAppQuit)
+	mux.HandleFunc("POST /api/app/quit/ack", handleAppQuitAck)
+	mux.HandleFunc("POST /api/app/quit/cancel", handleAppQuitCancel)
+
+	// 邀请链接：另一个进程转发过来的(热启动)，以及界面轮询取走的
+	mux.HandleFunc("POST /api/invite", handleInvitePost)
+	mux.HandleFunc("GET /api/invite", handleInviteGet)
+
 	LogDev("lanbridge 客户端 http://%s (server=%s)", listenAddr, serverBase)
 	url := "http://" + listenAddr
 
@@ -133,11 +225,20 @@ func main() {
 	if resp, err := http.Get(url + "/api/config"); err == nil {
 		resp.Body.Close()
 		LogDev("已有 lanbridge 客户端在运行,本次启动转为唤起既有实例")
+		forwardInvite(url)
 		if err := runWindow(url); err != nil {
 			openBrowser(url)
 		}
 		return
 	}
+
+	// 冷启动时链接可能在命令行里(系统用链接拉起本进程)。
+	// 必须在服务起来之前记下来，界面一开始轮询就能拿到。
+	if id, ok := inviteFromArgs(os.Args[1:]); ok {
+		setPendingInvite(id)
+	}
+	// Windows 注册 lanbridge:// 到当前用户(macOS 靠 Info.plist，这里为空)
+	ensureURLScheme()
 
 	// 房间聊天:8890 局域网直连服务(成员互发文字,不经房间服务器)
 	go startChatServer()
@@ -190,6 +291,19 @@ func saveToken(tok, name string) {
 	_ = os.WriteFile(filepath.Join(homeDir, "session.json"), b, 0o600)
 }
 
+// handleLogout 清理网络后删除本地凭据，远端离房暂时失败也能退出本地账号。
+func handleLogout(w http.ResponseWriter, r *http.Request) {
+	roomNetworkMu.Lock()
+	defer roomNetworkMu.Unlock()
+	exitCleanup()
+	if err := os.Remove(filepath.Join(homeDir, "session.json")); err != nil && !os.IsNotExist(err) {
+		errJSON(w, 500, "无法清除登录凭据，请重试")
+		return
+	}
+	clearRoomLog()
+	okJSON(w, map[string]any{"logged_out": true})
+}
+
 // ---------- 远端代理 ----------
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -206,7 +320,13 @@ func proxyNoAuth(w http.ResponseWriter, r *http.Request) {
 		remotePath = "/api/user/register"
 	}
 	body, _ := io.ReadAll(r.Body)
-	resp, err := http.Post(serverBase+remotePath, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, serverBase+remotePath, bytes.NewReader(body))
+	if err != nil {
+		errJSON(w, 502, "服务器地址无效")
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := remoteHTTPClient.Do(req)
 	if err != nil {
 		errJSON(w, 502, "无法连接服务器: "+err.Error())
 		return
@@ -241,16 +361,22 @@ func proxyAuthed(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		remoteURL += "?" + r.URL.RawQuery
 	}
-	req, _ := http.NewRequest(r.Method, remoteURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, remoteURL, bytes.NewReader(body))
+	if err != nil {
+		errJSON(w, 502, "服务器地址无效")
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := remoteHTTPClient.Do(req)
 	if err != nil {
 		errJSON(w, 502, "无法连接服务器: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
+	// 房间接口的响应是"当前在哪个房间"的唯一权威来源,顺手同步给日志分段
+	noteRoomFromResponse(r.URL.Path, b)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(b)
@@ -271,8 +397,17 @@ func ensureZTReady() error {
 		return fmt.Errorf("TAP 驱动文件准备失败: %w", err)
 	}
 	if ztRunning() {
-		ztStartErr = ""
-		return nil
+		if reason := ztUnhealthyReason(); reason != "" {
+			// 实例活着但坏着(TAP 建不出来等):这是首次安装"反复重启 exe 才能连上"
+			// 的病根——ztRunning() 为真后所有链路短路,坏了没人管。这里统一自救:
+			// 补装驱动(幂等)→ 杀实例重拉 → 重新建卡。节流防止轮询连环杀。
+			if !maybeRepairUnhealthy(reason) {
+				return fmt.Errorf("ZeroTier 实例不健康: %s(已自动尝试修复,稍后重试)", reason)
+			}
+		} else {
+			ztStartErr = ""
+			return nil
+		}
 	}
 	if err := ensureZTRuntime(); err != nil {
 		ztStartErr = err.Error()
@@ -450,15 +585,8 @@ func startZTInstance() error {
 // 只杀我们自己的实例:Windows 按镜像名 zt-node.exe;macOS 按运行路径匹配,
 // 避开系统 ZeroTier(进程名 zerotier-one)。
 func restartZTDaemon() error {
-	switch runtime.GOOS {
-	case "windows":
-		_, _ = hideCmd("taskkill", "/F", "/IM", "zt-node.exe").CombinedOutput()
-	case "darwin":
-		_, _ = hideCmd("pkill", "-f", filepath.Join(ztRuntimeDir(), "zt-node")).CombinedOutput()
-	}
-	// 等控制端口释放,否则新实例会因端口占用而起不来。
-	for i := 0; i < 30 && ztDaemonListening(); i++ {
-		time.Sleep(100 * time.Millisecond)
+	if err := killZTDaemon(); err != nil {
+		return err
 	}
 	return ensureZTReady()
 }
@@ -556,6 +684,9 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rawLines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	// 只保留当前房间那段:换过房间之后,上一个房间的故障记录会一直留在文件里,
+	// 用户在诊断面板里根本分不清哪条是现在这个房间的。
+	rawLines = clipLogs(rawLines)
 	view := r.URL.Query().Get("view")
 	var lines []string
 	switch view {
@@ -566,9 +697,21 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case "dev":
+		// 多行 LogDev(如 Windows 防火墙配置)只有首行带 d| 前缀,
+		// 后续行是裸文本。这里把它们跟着首行一起收,否则整段会消失。
+		inDev := false
 		for _, l := range rawLines {
 			if strings.HasPrefix(l, "d|") {
+				inDev = true
 				lines = append(lines, strings.TrimPrefix(l, "d|"))
+				continue
+			}
+			if strings.HasPrefix(l, "u|") {
+				inDev = false
+				continue
+			}
+			if inDev {
+				lines = append(lines, l)
 			}
 		}
 	default:
@@ -577,7 +720,12 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	if len(lines) > 200 {
 		lines = lines[len(lines)-200:]
 	}
-	okJSON(w, map[string]any{"logs": strings.Join(lines, "\n"), "path": logFilePath})
+	text := strings.Join(lines, "\n")
+	// 界面上不应该出现网络 hash:用户只认房间号
+	if roomID, networkID := roomLogSnapshot(); roomID > 0 {
+		text = maskNetworkID(text, roomID, networkID)
+	}
+	okJSON(w, map[string]any{"logs": text, "path": logFilePath})
 }
 
 // handlePing: 分层探测目标成员(本机网络 → ZeroTier 隧道 → 真实数据面)。
@@ -639,6 +787,8 @@ func handleZTHealth(w http.ResponseWriter, r *http.Request) {
 // handleZTJoin: 先离开本地其它网络,再 join 新网络(避免新旧实例抢网卡)
 // network_id 为空 + leave=all:仅离开所有网络(离开房间时用)
 func handleZTJoin(w http.ResponseWriter, r *http.Request) {
+	roomNetworkMu.Lock()
+	defer roomNetworkMu.Unlock()
 	var req struct {
 		NetworkID string `json:"network_id"`
 		Leave     string `json:"leave"`
@@ -651,20 +801,35 @@ func handleZTJoin(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, 400, "参数不合法")
 		return
 	}
+	// 先更新自愈目标，避免清理旧网络时被守护重新加入。
+	if req.NetworkID == "" {
+		clearDesiredNet()
+	} else {
+		setDesiredNet(req.NetworkID)
+	}
 	// 离开旧网络(服务端也会收回授权,双保险);用 JSON 解析避免列数变化
-	listOut, _ := ztRun("-j", "listnetworks")
+	listOut, listErr := ztRun("-j", "listnetworks")
 	var raw []map[string]any
-	if json.Unmarshal([]byte(listOut), &raw) == nil {
+	if listErr == nil {
+		listErr = json.Unmarshal([]byte(listOut), &raw)
+	}
+	var leaveErr error
+	if listErr == nil {
 		for _, m := range raw {
 			id, _ := m["id"].(string)
 			if id != "" && id != req.NetworkID {
-				_, _ = ztRun("leave", id)
+				if _, err := ztRun("leave", id); err != nil {
+					leaveErr = err
+				}
 			}
 		}
 	}
 	if req.NetworkID == "" {
-		clearDesiredNet()
 		restoreNetwork()
+		if listErr != nil || leaveErr != nil {
+			errJSON(w, 503, "本地虚拟网络未能完全释放，请稍后重试或查看诊断")
+			return
+		}
 		okJSON(w, map[string]any{"left": true})
 		return
 	}
@@ -704,7 +869,14 @@ func handleZTJoin(w http.ResponseWriter, r *http.Request) {
 		// 等不到不能就此放弃——跃点调优虽然只是锦上添花,但漏做会让游戏流量
 		// 走不到隧道。所以这里放宽到 90 秒,并单独重试一次。
 		if dev := waitNetworkDevice(req.NetworkID, 90*time.Second); dev != "" {
-			tuneNetwork(dev)
+			roomNetworkMu.Lock()
+			supMu.Lock()
+			current := desiredNet == req.NetworkID
+			supMu.Unlock()
+			if current {
+				tuneNetwork(dev)
+			}
+			roomNetworkMu.Unlock()
 		} else {
 			LogDev("[网络调优] 等待网卡超时(90s),跳过跃点调整;网络仍可用,只是游戏可能不走隧道")
 		}

@@ -1,13 +1,24 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { state, showToast } from '../store'
-import { login, register, fetchMe, leaveRoom } from '../api'
+import { state, showToast, askConfirm, resetRoom } from '../store'
+import { login, register, fetchMe, logout } from '../api'
+import { handleInvite } from '../lib/join'
 
 const username = ref('')
 const password = ref('')
 const submitting = ref(false)
 
+// 收到邀请时还没登录：先记住房间号，登录成功后接着把它加进去，
+// 否则用户登录完还得回头再找一次那条链接。
+function resumePendingInvite() {
+  const roomId = state.pendingJoinRoomId
+  if (!roomId) return
+  state.pendingJoinRoomId = null
+  handleInvite(roomId)
+}
+
 async function handleLogin() {
+  if (submitting.value || state.roomBusy) return
   const name = username.value.trim()
   if (!name || !password.value) {
     showToast('请输入用户名与密码', true)
@@ -21,6 +32,7 @@ async function handleLogin() {
     state.authModalOpen = false
     username.value = ''
     password.value = ''
+    resumePendingInvite()
   } catch (e: any) {
     showToast(`登录失败: ${e.message}`, true)
   } finally {
@@ -29,6 +41,7 @@ async function handleLogin() {
 }
 
 async function handleRegister() {
+  if (submitting.value || state.roomBusy) return
   const name = username.value.trim()
   if (!name || !password.value) {
     showToast('请输入用户名与密码', true)
@@ -42,6 +55,7 @@ async function handleRegister() {
     state.authModalOpen = false
     username.value = ''
     password.value = ''
+    resumePendingInvite()
   } catch (e: any) {
     showToast(`注册失败: ${e.message}`, true)
   } finally {
@@ -50,15 +64,40 @@ async function handleRegister() {
 }
 
 async function handleLogout() {
-  if (confirm(`当前登录为 ${state.me?.name}，是否退出登录？`)) {
-    try {
-      await leaveRoom()
-    } catch {}
-    location.reload()
+  if (submitting.value || state.roomBusy) return
+  const ok = await askConfirm({
+    title: `退出 ${state.me?.name || '当前账号'}？`,
+    detail: '退出后会先离开当前房间，下次打开需要重新登录。',
+    confirmText: '退出登录',
+    danger: true,
+  })
+  if (!ok) return
+  submitting.value = true
+  state.roomBusy = true
+  state.roomRevision++
+  try {
+    await logout()
+    resetRoom()
+    state.me = null
+    state.config = state.config ? { ...state.config, logged_in: false } : null
+    state.rooms = []
+    state.roomsError = ''
+    state.pendingJoinRoomId = null
+    state.passModalOpen = false
+    state.createDrawerOpen = false
+    state.authModalOpen = false
+    showToast('已退出登录')
+  } catch (e: any) {
+    showToast(`退出登录失败：${e.message}`, true)
+  } finally {
+    submitting.value = false
+    state.roomBusy = false
+    state.roomPollDue = 0
   }
 }
 
 function handleClose() {
+  if (submitting.value) return
   state.authModalOpen = false
 }
 </script>
@@ -93,7 +132,7 @@ function handleClose() {
         </div>
 
         <div class="modal-actions">
-          <button type="button" class="btn btn-danger" @click="handleLogout">
+          <button type="button" class="btn btn-danger" :disabled="submitting || state.roomBusy" @click="handleLogout">
             退出登录
           </button>
         </div>
@@ -125,7 +164,7 @@ function handleClose() {
           <button
             type="button"
             class="btn"
-            :disabled="submitting"
+            :disabled="submitting || state.roomBusy"
             @click="handleRegister"
           >
             注册新账号
@@ -133,7 +172,7 @@ function handleClose() {
           <button
             type="submit"
             class="btn btn-primary"
-            :disabled="submitting"
+            :disabled="submitting || state.roomBusy"
           >
             {{ submitting ? '请稍候…' : '登录' }}
           </button>

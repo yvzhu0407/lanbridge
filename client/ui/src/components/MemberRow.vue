@@ -36,8 +36,10 @@ async function doPing() {
   if (isMe.value) return
   pinging.value = true
   const netId = state.currentRoom?.network_id || ''
+  const revision = state.roomRevision
   try {
     const res = await pingPeer(props.member.assigned_ip, props.member.zt_node_id, netId)
+    if (revision !== state.roomRevision) return
     state.memberLatency[probeKey.value] = res
     if (res.reachable) {
       showToast(`测速成功: ${res.latency} ms (经 ${res.via === 'tcp' ? 'TCP 8890' : 'ICMP'})`)
@@ -45,6 +47,7 @@ async function doPing() {
       showToast(`${res.state_text}${res.tunnel !== undefined && res.tunnel >= 0 ? ` (隧道 ${res.tunnel}ms)` : ''}`, true)
     }
   } catch (e: any) {
+    if (revision !== state.roomRevision) return
     state.memberLatency[probeKey.value] = {
       state: 'no_tunnel',
       state_text: '探测失败',
@@ -68,7 +71,7 @@ async function doPing() {
         </div>
         <span class="player-name">{{ member.name }}</span>
         <span v-if="member.is_owner" class="badge badge-warn">房主</span>
-        <span v-if="isMe" class="badge badge-ok">你</span>
+        <span v-if="isMe" class="badge badge-subtle">你</span>
       </div>
     </td>
 
@@ -141,8 +144,10 @@ async function doPing() {
   background: var(--card-hover);
 }
 
+/* 自己那行要一眼认出来：左侧强调色竖条 + 淡底 */
 .member-row.is-me {
-  background: var(--card-subtle);
+  background: var(--accent-subtle);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .player-cell {
@@ -152,8 +157,8 @@ async function doPing() {
 }
 
 .player-avatar {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   border-radius: 4px;
   background: var(--card);
   border: 1px solid var(--border);
@@ -161,7 +166,7 @@ async function doPing() {
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--fg-subtle);
   flex: none;
 }
@@ -169,18 +174,19 @@ async function doPing() {
 .player-name {
   font-weight: 600;
   color: var(--fg);
+  font-size: 12px;
 }
 
 .ip-cell {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .ip-text {
   color: var(--accent);
   font-weight: 600;
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .btn-copy {
@@ -195,10 +201,10 @@ async function doPing() {
 .status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 8px;
+  gap: 5px;
+  padding: 1px 6px;
   border-radius: 4px;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 500;
   cursor: default;
 }

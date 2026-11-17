@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { state, showToast } from '../store'
-import { fetchRooms, joinRoom, joinZtNetwork } from '../api'
-import type { Room } from '../types'
+import { fetchRooms, parseInvite } from '../api'
+import { handleInvite } from '../lib/join'
 
 const search = ref('')
 const refreshing = ref(false)
+// 邀请码输入框：链接被聊天软件吞掉时，用户可以把房间号直接粘进来
+const inviteInput = ref('')
 
 const filteredRooms = computed(() => {
   const q = search.value.trim().toLowerCase()
@@ -21,8 +23,10 @@ async function reloadRooms(manual = false) {
   try {
     const list = await fetchRooms()
     state.rooms = list || []
+    state.roomsError = ''
     if (manual) showToast(`大厅已刷新 (共 ${state.rooms.length} 间)`)
   } catch (e: any) {
+    state.roomsError = e.message
     if (manual) showToast(`刷新失败: ${e.message}`, true)
   } finally {
     setTimeout(() => {
@@ -31,35 +35,21 @@ async function reloadRooms(manual = false) {
   }
 }
 
-function handleJoinClick(room: Room) {
-  if (state.currentRoom && state.currentRoom.room_id === room.id) {
-    state.currentView = 'room'
-    return
-  }
-
-  if (room.password_required) {
-    state.pendingJoinRoomId = room.id
-    state.passModalOpen = true
-  } else {
-    executeJoin(room.id, '')
-  }
+function openCreate() {
+  if (state.roomBusy) return
+  state.createDrawerOpen = true
+  if (!state.me) state.authModalOpen = true
 }
 
-async function executeJoin(roomId: number, pass: string) {
-  if (!state.nodeId) {
-    showToast('ZeroTier 本地节点尚未就绪', true)
+// 手动提交邀请：链接或房间号都收，解析和后端共用同一套规则。
+async function submitInviteCode() {
+  const id = parseInvite(inviteInput.value)
+  if (!id) {
+    showToast('没认出邀请链接或房间号', true)
     return
   }
-  showToast('正在加入房间并建立虚拟网络…')
-  try {
-    const res = await joinRoom(roomId, pass, state.nodeId)
-    await joinZtNetwork(res.network_id)
-    state.currentView = 'room'
-    await reloadRooms()
-    showToast('已加入房间，正在等待网络连接')
-  } catch (e: any) {
-    showToast(e.message, true)
-  }
+  inviteInput.value = ''
+  await handleInvite(id)
 }
 </script>
 
@@ -90,6 +80,19 @@ async function executeJoin(roomId: number, pass: string) {
         >
       </div>
 
+      <div class="search-box invite-box">
+        <input
+          v-model="inviteInput"
+          type="text"
+          class="input search-input"
+          placeholder="粘贴邀请链接或房间号…"
+          @keydown.enter="submitInviteCode"
+        >
+        <button class="btn btn-sm" :disabled="!inviteInput.trim() || state.roomBusy" @click="submitInviteCode">
+          加入
+        </button>
+      </div>
+
       <div class="toolbar-actions">
         <button
           class="btn btn-ghost"
@@ -106,7 +109,7 @@ async function executeJoin(roomId: number, pass: string) {
           <span>刷新</span>
         </button>
 
-        <button class="btn btn-primary" @click="state.createDrawerOpen = true">
+        <button class="btn btn-primary" :disabled="state.roomBusy" @click="openCreate">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"></line>
             <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -117,6 +120,7 @@ async function executeJoin(roomId: number, pass: string) {
     </div>
 
     <!-- 房间列表表格 (内部滚动，整页不滚) -->
+    <p v-if="state.roomsError" class="lobby-notice" role="alert">房间列表获取失败：{{ state.roomsError }}。可点击刷新重试。</p>
     <div class="rooms-table-wrap">
       <table class="rooms-table">
         <thead>
@@ -169,7 +173,7 @@ async function executeJoin(roomId: number, pass: string) {
                 v-else
                 class="btn btn-sm"
                 :class="r.password_required ? '' : 'btn-primary'"
-                @click="handleJoinClick(r)"
+                :disabled="state.roomBusy" @click="handleInvite(r.id)"
               >
                 {{ state.currentRoom ? '切换' : '加入' }}
               </button>
@@ -179,8 +183,22 @@ async function executeJoin(roomId: number, pass: string) {
           <tr v-if="filteredRooms.length === 0">
             <td colspan="5" class="empty-cell">
               <div class="empty-state">
-                <p>暂无活动房间</p>
-                <span>点击右上角「＋ 创建房间」即可一键开局</span>
+                <template v-if="state.roomsError">
+                  <p>暂时无法获取房间</p>
+                  <span>请检查连接后刷新，当前列表不代表没有房间</span>
+                </template>
+                <template v-else-if="!state.me">
+                  <p>登录后查看和加入房间</p>
+                  <button class="btn btn-primary" @click="state.authModalOpen = true">登录 / 注册</button>
+                </template>
+                <template v-else-if="search.trim()">
+                  <p>没有匹配的房间</p>
+                  <span>试试其他房间名或 ID</span>
+                </template>
+                <template v-else>
+                  <p>暂无活动房间</p>
+                  <span>创建房间，或粘贴朋友的邀请链接加入</span>
+                </template>
               </div>
             </td>
           </tr>
@@ -195,13 +213,21 @@ async function executeJoin(roomId: number, pass: string) {
 </template>
 
 <style scoped>
+.lobby-notice {
+  padding: 8px 10px;
+  color: var(--err);
+  background: var(--err-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 .lobby-view {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 16px;
-  gap: 12px;
+  padding: 10px 12px;
+  gap: 8px;
   background: var(--bg);
 }
 
@@ -209,7 +235,7 @@ async function executeJoin(roomId: number, pass: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px;
+  padding: 5px 10px;
   background: var(--accent-subtle);
   border: 1px solid var(--accent-border);
   border-radius: var(--radius);
@@ -224,8 +250,8 @@ async function executeJoin(roomId: number, pass: string) {
 .banner-content {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
+  gap: 7px;
+  font-size: 12px;
   color: var(--fg);
 }
 
@@ -243,7 +269,23 @@ async function executeJoin(roomId: number, pass: string) {
 
 .search-box {
   position: relative;
-  width: 280px;
+  width: 240px;
+}
+
+/* 邀请输入框：输入 + 加入按钮并排，宽度略宽以容纳完整链接 */
+.invite-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  min-width: 260px;
+}
+
+.invite-box .search-input {
+  flex: 1;
+  min-width: 0;
+  /* 这一侧没有搜索图标，留出 30px 会让文字看起来缩进莫名其妙 */
+  padding-left: 9px;
 }
 
 .search-icon {
@@ -278,7 +320,7 @@ async function executeJoin(roomId: number, pass: string) {
 .rooms-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 12px;
   text-align: left;
 }
 
@@ -291,15 +333,15 @@ async function executeJoin(roomId: number, pass: string) {
 }
 
 .rooms-table th {
-  padding: 8px 12px;
+  padding: 5px 10px;
   font-weight: 600;
   color: var(--fg-subtle);
-  font-size: 11px;
+  font-size: 10.5px;
   text-transform: uppercase;
 }
 
 .rooms-table td {
-  padding: 10px 12px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border-subtle);
   vertical-align: middle;
 }
@@ -333,19 +375,19 @@ async function executeJoin(roomId: number, pass: string) {
 
 .empty-cell {
   text-align: center;
-  padding: 60px 20px;
+  padding: 36px 16px;
   color: var(--fg-faint);
 }
 
 .empty-state p {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--fg-muted);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .empty-state span {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--fg-faint);
 }
 
@@ -353,7 +395,7 @@ async function executeJoin(roomId: number, pass: string) {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  font-size: 11.5px;
+  font-size: 10.5px;
   color: var(--fg-faint);
 }
 </style>

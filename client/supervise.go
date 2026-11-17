@@ -192,9 +192,11 @@ func planRecovery(daemonDown, found bool, ns netState, planetOK, everConfigured 
 	if stuck < notReadyGrace {
 		return actWait, "网络未就绪:" + ns.Reason
 	}
-	// 端口报错是驱动/权限问题,退出重进治不了,明确告知需人工处理。
+	// 端口报错(建卡失败)走到这里说明已过宽限期:leave+join 重新建卡
+	// (leave 会拆掉失败的端口),配合 ensureZTReady 的补装驱动+重启实例,
+	// 不再要求用户重启客户端。
 	if ns.Status == "PORT_ERROR" || ns.PortError != 0 {
-		return actWait, "虚拟网卡创建失败,需以管理员身份重启客户端重建网卡"
+		return actRejoin, "虚拟网卡创建失败,正在退出重进以重建网卡"
 	}
 	// planet 不可达 = 上游问题:本机重启/重连通常无益,等它自己恢复,别制造抖动。
 	// 但"从未拿到过配置"是例外:节点自己不会高频重拉,而 planetOK 只是采样瞬间的
@@ -221,6 +223,9 @@ func netStateFor(id string) (netState, bool) {
 
 // superviseOnce 执行一轮巡检。只做安全且幂等的本地动作,绝不乱杀进程。
 func superviseOnce() {
+	// 与手动切房、退出共用锁：清理完成后不能再执行旧网络的恢复动作。
+	roomNetworkMu.Lock()
+	defer roomNetworkMu.Unlock()
 	supMu.Lock()
 	net := desiredNet
 	supMu.Unlock()

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { state, showToast } from '../store'
+import { state, showToast, syncRoomNetwork } from '../store'
 import { fetchZtHealth, fetchLogs } from '../api'
 import { userCopy } from '../lib/userCopy'
 import type { Issue } from '../types'
@@ -17,12 +17,14 @@ const anyReady = computed(() => {
 })
 
 const planetDot = computed(() => {
+  if (!state.health) return 'warn'
   if (state.health?.planet_ok) return 'ok'
   if (anyReady.value) return 'warn'
   return 'err'
 })
 
 const planetText = computed(() => {
+  if (!state.health) return '尚未获取检测结果'
   if (state.health?.planet_ok) {
     const lat = state.health.planet_latency
     return lat >= 0 ? `已连通 (${lat} ms)` : '已连通'
@@ -75,10 +77,17 @@ async function handleRecheck() {
   try {
     const rep = await fetchZtHealth()
     state.health = rep
+    state.healthError = ''
+    state.nodeId = rep.node_ready ? rep.node_id : ''
+    syncRoomNetwork()
     await loadUserLogs()
     const count = (rep.issues || []).length
-    showToast(count > 0 ? `发现 ${count} 项异常` : '网络状态正常', count > 0)
+    showToast(count > 0 ? `发现 ${count} 项异常` : !rep.node_ready ? '联机引擎未就绪' : !anyReady.value ? '引擎已响应，尚无就绪的房间网络' : '本机虚拟网络已就绪', count > 0 || !rep.node_ready)
   } catch (e: any) {
+    state.health = null
+    state.healthError = e.message
+    state.nodeId = ''
+    syncRoomNetwork()
     showToast(`检查失败: ${e.message}`, true)
   } finally {
     setTimeout(() => {
@@ -96,7 +105,11 @@ onMounted(() => {
   <div class="diagnose-friendly">
     <!-- 诊断状态提示卡 -->
     <div class="status-summary-card">
-      <div v-if="state.health?.recovering" class="alert-box alert-warn">
+      <div v-if="!state.health" class="alert-box alert-warn">
+        <div class="alert-title">{{ state.healthError ? '无法获取网络状态' : '尚未完成网络检测' }}</div>
+        <div class="alert-desc">{{ state.healthError || '请点击重新检测，获取本机联机引擎和虚拟网络状态。' }}</div>
+      </div>
+      <div v-else-if="state.health.recovering" class="alert-box alert-warn">
         <div class="alert-title">🔄 自动恢复中：{{ state.health?.recover_note || '正在重新建立连接' }}</div>
         <div class="alert-desc">已交给后台自动处理，无需手动操作；若长时间未恢复，可尝试重启程序。</div>
       </div>
@@ -112,16 +125,24 @@ onMounted(() => {
         </div>
       </div>
 
+      <div v-else-if="!state.health.node_ready" class="alert-box alert-err">
+        <div class="alert-title">联机引擎未就绪</div>
+        <div class="alert-desc">请稍后重新检测，或查看最近事件。</div>
+      </div>
+      <div v-else-if="!anyReady" class="alert-box alert-warn">
+        <div class="alert-title">{{ state.currentRoom ? '房间网络尚未就绪' : '联机引擎已响应，尚未连接房间' }}</div>
+        <div class="alert-desc">{{ state.currentRoom ? '正在等待虚拟网卡和联机地址，稍后会自动更新。' : '加入房间后才能检测成员之间是否互通。' }}</div>
+      </div>
       <div v-else class="alert-box alert-ok">
         <div class="alert-title">✓ 虚拟网络状态正常</div>
-        <div class="alert-desc">本机虚拟网卡与桥联链路均就绪，可畅享多人游戏。</div>
+        <div class="alert-desc">本机虚拟网络已就绪。成员互通情况请查看房间测速，游戏内连接仍需实际验证。</div>
       </div>
 
       <!-- 根节点链路行 -->
       <div class="planet-row">
         <div class="planet-left">
           <span class="dot" :class="`dot-${planetDot}`"></span>
-          <span class="planet-label">房间服务器链路:</span>
+          <span class="planet-label">网络根节点链路:</span>
           <span class="planet-val">{{ planetText }}</span>
         </div>
         <button

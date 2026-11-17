@@ -61,6 +61,15 @@ cat > "$APP/Contents/Info.plist" <<EOF
 	<key>LSMinimumSystemVersion</key><string>11.0</string>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+	<!-- lanbridge://join/<房间号> 邀请链接。处理器在 window_darwin.go 里。 -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key><string>com.lanbridge.client.invite</string>
+			<key>CFBundleURLSchemes</key>
+			<array><string>lanbridge</string></array>
+		</dict>
+	</array>
 </dict>
 </plist>
 EOF

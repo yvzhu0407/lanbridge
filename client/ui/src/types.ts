@@ -36,6 +36,9 @@ export interface NetState {
   ready: boolean
   reason?: string
   steps?: string[]
+  // 面向用户的原因/步骤：reason 里是状态机名词，不能直接展示
+  user_reason?: string
+  user_steps?: string[]
 }
 
 export interface Issue {

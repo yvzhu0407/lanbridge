@@ -10,7 +10,6 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"

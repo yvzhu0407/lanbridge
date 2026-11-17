@@ -1,13 +1,20 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { state, showToast } from '../store'
-import { createRoom, joinZtNetwork } from '../api'
+import { createRoom } from '../api'
+import { connectRoom, confirmRoomSwitch } from '../lib/join'
 
 const roomName = ref('')
 const roomPassword = ref('')
 const submitting = ref(false)
 
 async function handleSubmit() {
+  if (submitting.value || state.roomBusy) return
+  if (!state.me) {
+    state.authModalOpen = true
+    showToast('请先登录，登录后可继续创建房间')
+    return
+  }
   const name = roomName.value.trim()
   if (!name) {
     showToast('请输入房间名称', true)
@@ -19,22 +26,26 @@ async function handleSubmit() {
   }
 
   submitting.value = true
+  state.roomBusy = true
+  state.roomRevision++
   try {
+    if (!await confirmRoomSwitch(name)) return
     const res = await createRoom(name, roomPassword.value, state.nodeId)
-    await joinZtNetwork(res.network_id)
-    showToast('房间已创建，正在等待网络连接')
+    await connectRoom(res, name)
     roomName.value = ''
     roomPassword.value = ''
     state.createDrawerOpen = false
-    state.currentView = 'room'
   } catch (e: any) {
     showToast(e.message, true)
   } finally {
     submitting.value = false
+    state.roomBusy = false
+    state.roomPollDue = 0
   }
 }
 
 function handleClose() {
+  if (submitting.value) return
   state.createDrawerOpen = false
 }
 </script>
@@ -76,7 +87,7 @@ function handleClose() {
 
         <div class="modal-actions">
           <button type="button" class="btn" @click="handleClose">取消</button>
-          <button type="submit" class="btn btn-primary" :disabled="submitting">
+          <button type="submit" class="btn btn-primary" :disabled="submitting || state.roomBusy">
             {{ submitting ? '创建中…' : '创建并进入' }}
           </button>
         </div>
