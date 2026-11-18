@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<GameData>
+  <LocalizedText>
+    <Replace Tag="LOC_MULTIPLAYER_LAN_GAME" Language="zh_Hans_CN">
+      <Text>局域网游戏 · LANBridge</Text>
+    </Replace>
+    <Replace Tag="LOC_MULTIPLAYER_LAN_GAME_TT" Language="zh_Hans_CN">
+      <Text>先连接 LANBridge 共享网络，再在这里创建或加入游戏。</Text>
+    </Replace>
+    <Replace Tag="LOC_MULTIPLAYER_LAN_GAME" Language="en_US">
+      <Text>Local Network · LANBridge</Text>
+    </Replace>
+    <Replace Tag="LOC_MULTIPLAYER_LAN_GAME_TT" Language="en_US">
+      <Text>Connect to the LANBridge shared network first, then host or join a game here.</Text>
+    </Replace>
+  </LocalizedText>
+</GameData>

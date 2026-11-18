@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Mod id="5dd64adc-7335-44cf-9aa3-074043c6cf71" version="1">
+  <Properties>
+    <Name>LANBridge 局域网联机（实验版）</Name>
+    <Teaser>从文明 6 原生局域网大厅创建和加入游戏。</Teaser>
+    <Description>为原生局域网入口提供 LANBridge 指引；网络连接由独立后台处理。</Description>
+    <Authors>LANBridge</Authors>
+    <CompatibleVersions>1.2,2.0</CompatibleVersions>
+  </Properties>
+  <FrontEndActions>
+    <UpdateText id="LANBRIDGE_FRONTEND_TEXT">
+      <File>text.xml</File>
+    </UpdateText>
+  </FrontEndActions>
+  <Files>
+    <File>text.xml</File>
+  </Files>
+</Mod>
